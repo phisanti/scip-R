@@ -1,0 +1,43 @@
+Package: scipR
+Title: SCIP Indexer for R Workspaces
+Version: 0.9
+Authors@R: 
+    person(given = "Santiago",
+           family = "Cano-Muniz",
+           email = "tisalon@proton.me",
+           role = c("aut", "cre"))
+Author: Santiago Cano-Muniz [aut, cre]
+Maintainer: Santiago Cano-Muniz <tisalon@proton.me>
+Description: Generates SCIP indexes for R codebases so developer tools can serve
+    symbol-aware code search and navigation. Still under active development.
+License: MIT
+Encoding: UTF-8
+Depends: R (>= 3.6)
+Imports:
+    RProtoBuf,
+    optparse,
+    stringi,
+    Rapp
+Suggests:
+    digest,
+    mirai,
+    testthat (>= 3.0.0)
+LazyData: false
+RoxygenNote: 7.3.2
+Collate: 
+    'workspace.R'
+    'utils.R'
+    'files.R'
+    'parser.R'
+    'parse-tree-utils.R'
+    'symbols-r6.R'
+    'symbols-s3.R'
+    'symbols-qualified.R'
+    'symbols.R'
+    'serializer.R'
+    'diagnostics.R'
+    'occurrences.R'
+    'cli.R'
+    'symbols_mirai.R'
+    'serializer_mirai.R'
+    'zzz.R'
