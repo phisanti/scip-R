@@ -152,3 +152,41 @@ qualified_to_scip <- function(qualified_info, workspace) {
     )
   )
 }
+
+#' Collect external symbols from parsed files and workspace dependencies.
+#'
+#' Creates placeholder external symbol entries for each package listed in
+#' workspace dependencies. This provides a starting point for cross-package
+#' symbol resolution.
+#'
+#' @param parsed_files List of parsed AST modules (currently unused, for future expansion).
+#' @param workspace Workspace context with dependency information.
+#' @return List of external symbol descriptors grouped by package.
+#' @export
+#' @examples
+#' \dontrun{
+#' workspace <- analyze_workspace(tempdir())
+#' externals <- collect_external_symbols(list(), workspace)
+#' }
+collect_external_symbols <- function(parsed_files, workspace) {
+  deps <- workspace$dependencies
+  if (is.null(deps) || length(deps) == 0) {
+    return(list())
+  }
+
+  externals <- list()
+  pkg_names <- names(deps)
+
+  for (pkg_name in pkg_names) {
+    version <- deps[[pkg_name]]
+    if (is.na(version)) version <- "0.0.0"
+
+    externals[[length(externals) + 1]] <- list(
+      package = pkg_name,
+      version = version,
+      symbols = list()
+    )
+  }
+
+  externals
+}

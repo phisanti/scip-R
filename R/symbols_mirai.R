@@ -32,6 +32,7 @@ resolve_documents_mirai <- function(files, workspace, daemons = parallel::detect
   tasks <- lapply(files, function(file_info) {
     mirai::mirai(
       {
+        library(scipR)
         ast <- parse_file(file_info)
         analysis <- resolve_symbols(ast, workspace, track_externals = TRUE)
         occurrences <- map_occurrences(analysis, ast)

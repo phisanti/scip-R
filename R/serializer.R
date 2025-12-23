@@ -207,17 +207,34 @@ build_symbol_information_message <- function(symbol_entry) {
   kind_enum <- RProtoBuf::P("scip.SymbolInformation.Kind")
   sym$kind <- switch(
     symbol_entry$kind,
+    # Basic R constructs
     `function` = as.integer(kind_enum$Function),      # 17
     call = as.integer(kind_enum$Function),            # 17
     variable = as.integer(kind_enum$Variable),        # 61
     parameter = as.integer(kind_enum$Parameter),      # 37
+    # S3 OOP
     s3_generic = as.integer(kind_enum$Function),      # 17
     s3_method = as.integer(kind_enum$Method),         # 26
+    # R6 OOP
     r6_class = as.integer(kind_enum$Class),           # 7
     r6_method = as.integer(kind_enum$Method),         # 26
     r6_field = as.integer(kind_enum$Field),           # 15
     r6_constructor = as.integer(kind_enum$Constructor), # 9
     r6_active = as.integer(kind_enum$Property),       # 41
+    # S4 OOP
+    s4_class = as.integer(kind_enum$Class),           # 7
+    s4_generic = as.integer(kind_enum$Function),      # 17
+    s4_method = as.integer(kind_enum$Method),         # 26
+    s4_slot = as.integer(kind_enum$Field),            # 15
+    # Shiny patterns
+    shiny_module = as.integer(kind_enum$Module),      # 27
+    shiny_module_function = as.integer(kind_enum$Function), # 17
+    shiny_ui = as.integer(kind_enum$Function),        # 17
+    shiny_server = as.integer(kind_enum$Function),    # 17
+    shiny_reactive = as.integer(kind_enum$Variable),  # 61
+    shiny_observer = as.integer(kind_enum$Event),     # 12
+    shiny_output = as.integer(kind_enum$Property),    # 41
+    shiny_namespace = as.integer(kind_enum$Namespace), # 28
     as.integer(kind_enum$UnspecifiedKind)             # 0
   )
   sym
@@ -234,9 +251,23 @@ build_external_symbol_messages <- function(externals) {
     if (is.null(entry$symbols) || length(entry$symbols) == 0) {
       next
     }
-    for (sym_name in entry$symbols) {
+    pkg_name <- entry$package %||% "unknown"
+    pkg_version <- entry$version %||% "0.0.0"
+    
+    for (sym_info in entry$symbols) {
       sym <- RProtoBuf::new(RProtoBuf::P("scip.SymbolInformation"))
-      sym$symbol <- sym_name
+      
+      # Handle both old format (string) and new format (list with name field)
+      if (is.character(sym_info)) {
+        sym_name <- sym_info
+      } else if (is.list(sym_info)) {
+        sym_name <- sym_info$name %||% ""
+      } else {
+        next
+      }
+      
+      # Build SCIP symbol descriptor
+      sym$symbol <- sprintf("scip-r %s %s %s().", pkg_name, pkg_version, sym_name)
       msgs[[length(msgs) + 1]] <- sym
     }
   }

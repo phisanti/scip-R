@@ -3,7 +3,9 @@
 #' @include parse-tree-utils.R
 #' @include symbols-qualified.R
 #' @include symbols-s3.R
+#' @include symbols-s4.R
 #' @include symbols-r6.R
+#' @include symbols-shiny.R
 NULL
 
 # This script derives symbol definitions and relationships from parsed modules.
@@ -106,9 +108,26 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   r6_symbols <- build_r6_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
   
   if (length(r6_symbols) > 0) {
-    # Merge R6 symbols into main symbol list
     for (r6_sym in r6_symbols) {
       symbols[[length(symbols) + 1]] <- r6_sym
+    }
+  }
+
+  # Extract S4 class symbols (classes, generics, methods, slots)
+  s4_symbols <- build_s4_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  
+  if (length(s4_symbols) > 0) {
+    for (s4_sym in s4_symbols) {
+      symbols[[length(symbols) + 1]] <- s4_sym
+    }
+  }
+
+  # Extract Shiny symbols (modules, reactives, observers, outputs)
+  shiny_symbols <- build_shiny_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  
+  if (length(shiny_symbols) > 0) {
+    for (shiny_sym in shiny_symbols) {
+      symbols[[length(symbols) + 1]] <- shiny_sym
     }
   }
 
@@ -131,9 +150,15 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
       
       if (length(pkg_idx) == 0) {
         # Create new package entry
+        # Safe access: use named indexing with default fallback
+        dep_version <- if (pkg_name %in% names(workspace$dependencies)) {
+          workspace$dependencies[[pkg_name]]
+        } else {
+          "0.0.0"
+        }
         external_refs[[length(external_refs) + 1]] <- list(
           package = pkg_name,
-          version = workspace$dependencies[[pkg_name]] %||% "0.0.0",
+          version = dep_version,
           symbols = list(list(
             name = qual$token,
             accessor = qual$accessor,
