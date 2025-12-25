@@ -241,7 +241,7 @@ visualize_r6_parse_tree <- function(ast_module,
   }
 
   write_lines("\nTip: Increase `max_rows_per_token` to dump full groups.")
-  message(sprintf("Parse tree visualization written to %s", output_file))
+  cli::cli_alert_success("Parse tree visualization written to {.path {output_file}}")
 
   invisible(list(
     trace = trace_df,

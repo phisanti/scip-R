@@ -65,8 +65,8 @@ install_scip_cli <- function(destdir = NULL) {
     install_location <- destdir
   }
 
-  message(sprintf("✓ scip-r CLI tool installed to: %s", install_location))
-  message("  Make sure this directory is in your PATH.")
+  cli::cli_alert_success("scip-r CLI tool installed to: {.path {install_location}}")
+  cli::cli_alert_info("Make sure this directory is in your PATH")
 
   invisible(TRUE)
 }

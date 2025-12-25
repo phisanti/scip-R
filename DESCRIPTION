@@ -14,10 +14,11 @@ License: MIT
 Encoding: UTF-8
 Depends: R (>= 3.6)
 Imports:
-    RProtoBuf,
+    cli,
     optparse,
-    stringi,
-    Rapp
+    RProtoBuf,
+    Rapp,
+    stringi
 Suggests:
     digest,
     mirai,
