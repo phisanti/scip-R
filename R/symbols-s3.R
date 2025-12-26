@@ -128,7 +128,7 @@ parse_s3_method_name <- function(func_name) {
 #'
 #' @param ast_module List produced by `parse_file()` containing parse data.
 #' @return List of S3 symbol information with type, name, generic, and range.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "script.R", relative_path = "script.R"))
@@ -215,7 +215,6 @@ extract_s3_symbols <- function(ast_module) {
 #' @param s3_info List from extract_s3_symbols with type, names, and range.
 #' @param workspace Workspace context with package metadata.
 #' @return List with SCIP symbol descriptor and metadata.
-#' @export
 #' @keywords internal
 s3_to_scip <- function(s3_info, workspace) {
   package_name <- workspace$metadata$namespace %||% "local"
@@ -253,7 +252,7 @@ s3_to_scip <- function(s3_info, workspace) {
 #' @param relative_path Document relative path for symbol IDs.
 #' @param namespace Optional namespace prefix for symbol IDs.
 #' @return List of symbol entries with symbol, display_name, kind fields.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "my_s3.R", relative_path = "my_s3.R"))

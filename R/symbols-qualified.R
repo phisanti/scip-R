@@ -12,7 +12,7 @@ NULL
 #'
 #' @param text Character string to parse (e.g., "dplyr::mutate").
 #' @return List with components: full_token, package, accessor, token.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' look_backward("dplyr::mutate")
@@ -48,7 +48,7 @@ look_backward <- function(text) {
 #'
 #' @param ast_module List produced by `parse_file()` containing parse data.
 #' @return List of qualified symbol information with package, accessor, token, and range.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "script.R", relative_path = "script.R"))
@@ -128,7 +128,6 @@ extract_qualified_symbols <- function(ast_module) {
 #' @param qualified_info List from extract_qualified_symbols with package, accessor, token.
 #' @param workspace Workspace context with dependency versions.
 #' @return List with SCIP symbol descriptor and metadata.
-#' @export
 #' @keywords internal
 qualified_to_scip <- function(qualified_info, workspace) {
   package_name <- qualified_info$package
@@ -162,7 +161,7 @@ qualified_to_scip <- function(qualified_info, workspace) {
 #' @param parsed_files List of parsed AST modules (currently unused, for future expansion).
 #' @param workspace Workspace context with dependency information.
 #' @return List of external symbol descriptors grouped by package.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' workspace <- analyze_workspace(tempdir())

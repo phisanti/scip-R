@@ -15,7 +15,7 @@ NULL
 #' @param daemons Number of mirai daemons for document preparation.
 #' @param bundles Optional pre-computed document bundles.
 #' @return Invisibly returns the output path.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' serialize_documents_mirai(plan$files, workspace, "index.scip", daemons = 4)

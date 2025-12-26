@@ -17,7 +17,6 @@ NULL
 #'
 #' @param ast_module List produced by `parse_file()` containing expressions and parse data.
 #' @return List of Shiny symbol information structures.
-#' @export
 #' @keywords internal
 #' @examples
 #' \dontrun{
@@ -370,7 +369,7 @@ find_output_assignment <- function(expr_id, data) {
 #' @param relative_path Document relative path for symbol IDs.
 #' @param namespace Optional namespace prefix for symbol IDs.
 #' @return List of symbol entries with symbol, display_name, kind fields.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "app.R", relative_path = "app.R"))

@@ -187,7 +187,7 @@ process_single_file <- function(file_info, workspace) {
 #'
 #' @param parallel_value Parsed integer from CLI or config.
 #' @return Integer number of workers to request (0 for sequential mode).
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' validate_parallel_arg(0)   # 0L (sequential)

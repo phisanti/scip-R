@@ -14,9 +14,11 @@ NULL
 #' @param workspace Workspace list produced by `analyze_workspace()`.
 #' @param cache_enabled Logical flag enabling cache hints and manifest writes.
 #' @return A list containing discovered files and cache metadata.
-#' @export
+#' @keywords internal
 #' @examples
+#' \dontrun{
 #' discover_files(list(metadata = list(project_root = tempdir()), ignore = character()))
+#' }
 discover_files <- function(workspace, cache_enabled = FALSE) {
   root <- workspace$metadata$project_root
   ignore <- workspace$ignore %||% list()

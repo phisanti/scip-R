@@ -10,9 +10,11 @@ NULL
 #' @param ast_module Parsed module data.
 #' @param symbol_data Symbol resolution output.
 #' @return A list of diagnostic entries with severity, message, and ranges.
-#' @export
+#' @keywords internal
 #' @examples
+#' \dontrun{
 #' collect_diagnostics(list(path = "script.R"), list(), list())
+#' }
 collect_diagnostics <- function(file_info, ast_module, symbol_data) {
   list()
 }

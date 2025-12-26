@@ -12,9 +12,11 @@ NULL
 #' @param output_path Desired location for the serialized `.scip` file.
 #' @param workspace Workspace context providing metadata.
 #' @return An environment acting as a serializer handle.
-#' @export
+#' @keywords internal
 #' @examples
+#' \dontrun{
 #' serializer <- init_serializer("index.scip", analyze_workspace(tempdir()))
+#' }
 init_serializer <- function(output_path, workspace) {
   env <- new.env(parent = emptyenv())
   env$path <- output_path
@@ -31,10 +33,12 @@ init_serializer <- function(output_path, workspace) {
 #' @param document Document list as returned by `build_document()`.
 #' @param diagnostics Optional list of diagnostics to attach.
 #' @return Invisible NULL.
-#' @export
+#' @keywords internal
 #' @examples
+#' \dontrun{
 #' serializer <- init_serializer("index.scip", analyze_workspace(tempdir()))
 #' write_document(serializer, list(relative_path = "script.R"))
+#' }
 write_document <- function(serializer, document, diagnostics = list()) {
   doc_message <- build_document_message(document, diagnostics)
   serializer$documents[[length(serializer$documents) + 1]] <- doc_message
@@ -46,10 +50,12 @@ write_document <- function(serializer, document, diagnostics = list()) {
 #' @param serializer Serializer environment.
 #' @param externals List of external symbol descriptors.
 #' @return Invisible NULL.
-#' @export
+#' @keywords internal
 #' @examples
+#' \dontrun{
 #' serializer <- init_serializer("index.scip", analyze_workspace(tempdir()))
 #' write_externals(serializer, list())
+#' }
 write_externals <- function(serializer, externals) {
   if (length(externals) == 0) {
     serializer$externals <- list()
@@ -64,10 +70,12 @@ write_externals <- function(serializer, externals) {
 #'
 #' @param serializer Serializer environment.
 #' @return Invisible path to the written file.
-#' @export
+#' @keywords internal
 #' @examples
+#' \dontrun{
 #' serializer <- init_serializer("index.scip", analyze_workspace(tempdir()))
 #' close_serializer(serializer)
+#' }
 close_serializer <- function(serializer) {
   index_msg <- build_index_message(serializer)
   raw <- RProtoBuf::serialize(index_msg, NULL)

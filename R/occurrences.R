@@ -11,7 +11,7 @@ NULL
 #' @param symbol_data Symbol resolution output.
 #' @param ast_module Parsed module data.
 #' @return A list of occurrence entries with symbol identifiers and ranges.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "script.R", relative_path = "script.R"))
@@ -28,7 +28,7 @@ map_occurrences <- function(symbol_data, ast_module) {
 #' @param occurrences List of occurrences returned by `map_occurrences()`.
 #' @param symbol_data Symbol resolution output.
 #' @return A list representing a document suitable for serialization.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "script.R", relative_path = "script.R"))

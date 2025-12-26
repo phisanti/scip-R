@@ -18,7 +18,7 @@ NULL
 #' @param workspace Workspace context with metadata and dependencies.
 #' @param track_externals Logical; if TRUE, track package-qualified external symbols (default: TRUE).
 #' @return A list containing symbol information, occurrence records, and external references.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "script.R", relative_path = "script.R"))
@@ -281,7 +281,6 @@ determine_symbol_kind <- function(row, parse_data) {
 #' @param refs1 First external references list.
 #' @param refs2 Second external references list to merge.
 #' @return Merged external references list.
-#' @export
 #' @keywords internal
 merge_external_refs <- function(refs1, refs2) {
   if (length(refs1) == 0) return(refs2)

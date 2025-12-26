@@ -14,7 +14,7 @@ NULL
 #' @param workspace Workspace context obtained via `analyze_workspace()`.
 #' @param daemons Number of mirai daemons to launch (defaults to physical cores).
 #' @return A list of lists, each containing `document` and `diagnostics` entries.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' docs <- resolve_documents_mirai(plan$files, workspace, daemons = 4)

@@ -10,7 +10,7 @@ NULL
 #'
 #' @param file_info List describing the source file (path, relative_path, etc.).
 #' @return A list containing the parsed expressions, parse data, and source references.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' file_info <- list(path = "script.R", relative_path = "script.R")

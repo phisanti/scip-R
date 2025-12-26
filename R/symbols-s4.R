@@ -13,7 +13,6 @@ NULL
 #'
 #' @param ast_module List produced by `parse_file()` containing expressions and parse data.
 #' @return List of S4 class information structures.
-#' @export
 #' @keywords internal
 #' @examples
 #' \dontrun{
@@ -293,7 +292,7 @@ extract_string_vector_arg <- function(descendants, data, arg_name) {
 #' @param relative_path Document relative path for symbol IDs.
 #' @param namespace Optional namespace prefix for symbol IDs.
 #' @return List of symbol entries with symbol, display_name, kind fields.
-#' @export
+#' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "my_s4.R", relative_path = "my_s4.R"))

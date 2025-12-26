@@ -9,9 +9,11 @@ NULL
 #' @param root Character path to the project root directory.
 #' @param namespace Optional symbol namespace prefix to prepend to emitted symbols.
 #' @return A list containing metadata, dependencies, normalized root URI, and ignore patterns.
-#' @export
+#' @keywords internal
 #' @examples
+#' \dontrun{
 #' analyze_workspace(tempdir())
+#' }
 analyze_workspace <- function(root, namespace = NULL) {
   root <- normalizePath(root, winslash = "/", mustWork = FALSE)
   metadata <- list(
