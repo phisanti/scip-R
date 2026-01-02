@@ -28,17 +28,25 @@ extract_r6_symbols <- function(ast_module) {
     return(list())
   }
 
-  r6_classes <- list()
-
-  # Find all SYMBOL_FUNCTION_CALL tokens
+  # FAST PATH: Check if file has any R6Class calls at all
+  # Pre-filter on text to avoid expensive is_r6class_call checks for every function call
   func_calls <- data[data$token == "SYMBOL_FUNCTION_CALL", , drop = FALSE]
 
   if (nrow(func_calls) == 0) {
     return(list())
   }
 
-  for (i in seq_len(nrow(func_calls))) {
-    call_row <- func_calls[i, ]
+  # Only consider calls that could be R6Class (text contains "R6Class")
+  potential_r6_calls <- func_calls[grepl("R6Class", func_calls$text, fixed = TRUE), , drop = FALSE]
+
+  if (nrow(potential_r6_calls) == 0) {
+    return(list())
+  }
+
+  r6_classes <- list()
+
+  for (i in seq_len(nrow(potential_r6_calls))) {
+    call_row <- potential_r6_calls[i, ]
 
     # Check if this is an R6Class call (with or without namespace)
     if (!is_r6class_call(call_row, data)) {
