@@ -5,6 +5,169 @@ NULL
 # It centralizes tree traversal logic used across symbol detection modules
 # (symbols.R, symbols-s3.R, symbols-r6.R) to avoid duplication and ensure
 # consistent tree navigation patterns throughout the codebase.
+#
+# PERFORMANCE NOTE: For large files, use the indexed variants (_indexed suffix)
+# which use pre-computed lookups instead of scanning the full data frame.
+# Call build_tree_index() once per file, then pass the index to indexed functions.
+
+#' Build a tree index for O(1) parent/child lookups.
+#'
+#' Pre-computes parent-child relationships from parse data to enable
+#' fast tree navigation without repeated data frame scans.
+#'
+#' @param parse_data Parse data data.frame from getParseData().
+#' @return A list with:
+#'   - children: Named list mapping parent IDs to vectors of child IDs
+#'   - parent: Named vector mapping node IDs to parent IDs
+#'   - rows: Named list mapping node IDs to row indices in parse_data
+#'   - data: Reference to the original parse_data
+#' @keywords internal
+#' @examples
+#' \dontrun{
+#' data <- getParseData(parse("script.R", keep.source = TRUE))
+#' index <- build_tree_index(data)
+#' children <- get_children_indexed(5, index)
+#' }
+build_tree_index <- function(parse_data) {
+  if (is.null(parse_data) || nrow(parse_data) == 0) {
+    return(list(
+      children = list(),
+      parent = integer(0),
+      rows = list(),
+      data = parse_data
+    ))
+  }
+
+  # Pre-compute children: parent_id -> vector of child ids
+  children <- split(parse_data$id, parse_data$parent)
+
+  # Pre-compute parent lookup: node_id -> parent_id
+  parent <- setNames(parse_data$parent, as.character(parse_data$id))
+
+  # Pre-compute row indices: node_id -> row index in parse_data
+  rows <- setNames(seq_len(nrow(parse_data)), as.character(parse_data$id))
+
+  list(
+    children = children,
+    parent = parent,
+    rows = rows,
+    data = parse_data
+  )
+}
+
+#' Get child IDs using pre-computed index (O(1)).
+#'
+#' @param node_id Numeric ID of the parent node.
+#' @param index Tree index from build_tree_index().
+#' @return Integer vector of child node IDs.
+#' @keywords internal
+get_children_indexed <- function(node_id, index) {
+  index$children[[as.character(node_id)]] %||% integer(0)
+}
+
+#' Get parent ID using pre-computed index (O(1)).
+#'
+#' @param node_id Numeric ID of the child node.
+#' @param index Tree index from build_tree_index().
+#' @return Integer parent ID, or NA if no parent.
+#' @keywords internal
+get_parent_id_indexed <- function(node_id, index) {
+  index$parent[[as.character(node_id)]]
+}
+
+#' Get row index for a node using pre-computed index (O(1)).
+#'
+#' @param node_id Numeric ID of the node.
+#' @param index Tree index from build_tree_index().
+#' @return Integer row index in parse_data, or NA if not found.
+#' @keywords internal
+get_row_indexed <- function(node_id, index) {
+  index$rows[[as.character(node_id)]]
+}
+
+#' Check if node has descendant of given type using DFS with early exit.
+#'
+#' Efficiently checks if any descendant node has one of the specified token types.
+#' Uses depth-first search with early exit - stops as soon as a match is found.
+#'
+#' @param node_id Numeric ID of the starting node.
+#' @param token_types Character vector of token types to search for.
+#' @param index Tree index from build_tree_index().
+#' @return Logical indicating if a descendant of the specified type exists.
+#' @keywords internal
+has_descendant_of_type_indexed <- function(node_id, token_types, index) {
+  stack <- get_children_indexed(node_id, index)
+
+  while (length(stack) > 0) {
+    current <- stack[1]
+    stack <- stack[-1]
+
+    row_idx <- get_row_indexed(current, index)
+    if (!is.na(row_idx) && index$data$token[row_idx] %in% token_types) {
+      return(TRUE)  # Early exit on first match
+    }
+
+    # Add children to front of stack (DFS)
+    children <- get_children_indexed(current, index)
+    if (length(children) > 0) {
+      stack <- c(children, stack)
+    }
+  }
+
+  FALSE
+}
+
+#' Get all descendant IDs using iterative traversal (O(n)).
+#'
+#' Collects all descendant node IDs without the O(n^2) rbind overhead.
+#' Uses a worklist algorithm with pre-allocated output.
+#'
+#' @param node_id Numeric ID of the starting node.
+#' @param index Tree index from build_tree_index().
+#' @return Integer vector of all descendant node IDs.
+#' @keywords internal
+get_descendant_ids_indexed <- function(node_id, index) {
+  result <- integer(0)
+  stack <- get_children_indexed(node_id, index)
+
+  while (length(stack) > 0) {
+    current <- stack[1]
+    stack <- stack[-1]
+    result <- c(result, current)
+
+    children <- get_children_indexed(current, index)
+    if (length(children) > 0) {
+      stack <- c(children, stack)
+    }
+  }
+
+  result
+}
+
+#' Get all descendants as data frame using indexed traversal.
+#'
+#' Returns descendants as a data frame, but uses efficient indexed traversal
+#' internally. Useful when you need the full row data, not just IDs.
+#'
+#' @param node_id Numeric ID of the starting node.
+#' @param index Tree index from build_tree_index().
+#' @return Data.frame subset containing all descendants.
+#' @keywords internal
+get_descendants_indexed <- function(node_id, index) {
+  ids <- get_descendant_ids_indexed(node_id, index)
+  if (length(ids) == 0) {
+    return(index$data[integer(0), , drop = FALSE])
+  }
+  # Use row indices for fast subsetting
+  row_indices <- vapply(ids, function(id) get_row_indexed(id, index), integer(1))
+  row_indices <- row_indices[!is.na(row_indices)]
+  index$data[row_indices, , drop = FALSE]
+}
+
+# ============================================================================
+# Legacy functions (O(n) scans) - kept for backwards compatibility
+# Prefer indexed variants for performance-critical code paths
+# ============================================================================
 
 #' Get all child nodes of a given node.
 #'
@@ -25,8 +188,8 @@ get_children <- function(node_id, parse_data) {
 
 #' Get all descendant nodes recursively.
 #'
-#' Recursively collects all child nodes and their descendants.
-#' This is the canonical implementation used across all symbol detection modules.
+#' Collects all child nodes and their descendants using iterative traversal.
+#' Uses list accumulation + single rbind to avoid O(n^2) memory allocation.
 #'
 #' @param node_id Numeric ID of the starting node.
 #' @param parse_data Parse data data.frame from getParseData().
@@ -38,21 +201,30 @@ get_children <- function(node_id, parse_data) {
 #' descendants <- get_descendants(5, data)
 #' }
 get_descendants <- function(node_id, parse_data) {
-  children <- get_children(node_id, parse_data)
+  # Use iterative BFS with list accumulation to avoid O(n^2) rbind
+  result_list <- list()
+  stack <- list(node_id)
 
-  if (nrow(children) == 0) {
-    return(children)
-  }
+  while (length(stack) > 0) {
+    current_id <- stack[[1]]
+    stack <- stack[-1]
 
-  all_descendants <- children
-  for (child_id in children$id) {
-    child_descendants <- get_descendants(child_id, parse_data)
-    if (nrow(child_descendants) > 0) {
-      all_descendants <- rbind(all_descendants, child_descendants)
+    children <- parse_data[parse_data$parent == current_id, , drop = FALSE]
+    if (nrow(children) > 0) {
+      result_list[[length(result_list) + 1]] <- children
+      # Add child IDs to stack for further traversal
+      for (cid in children$id) {
+        stack[[length(stack) + 1]] <- cid
+      }
     }
   }
 
-  all_descendants
+  if (length(result_list) == 0) {
+    return(parse_data[integer(0), , drop = FALSE])
+  }
+
+  # Single rbind at the end - O(n) instead of O(n^2)
+  do.call(rbind, result_list)
 }
 
 #' Get parent node of a given node.

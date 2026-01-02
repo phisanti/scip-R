@@ -13,46 +13,71 @@ NULL
 #'
 #' @param func_id Numeric ID of the FUNCTION token in parse data.
 #' @param data Parse data data.frame from getParseData().
+#' @param index Optional tree index from build_tree_index() for O(1) lookups.
 #' @return List with is_generic (logical) and generic_name (character) if detected.
 #' @keywords internal
-detect_s3_generic <- function(func_id, data) {
+detect_s3_generic <- function(func_id, data, index = NULL) {
   # The FUNCTION token's parent is an expr containing the entire function definition
   # The function body is a sibling expr node (with same parent)
   func_row <- data[data$id == func_id, , drop = FALSE]
   if (nrow(func_row) == 0) {
     return(list(is_generic = FALSE, generic_name = NULL))
   }
-  
+
   func_parent <- func_row$parent[1]
-  
+
   # Get all siblings of FUNCTION (nodes with same parent)
   siblings <- data[data$parent == func_parent, , drop = FALSE]
-  
+
   # The function body is typically the last expr sibling after the closing ')'
   body_exprs <- siblings[siblings$token == "expr", , drop = FALSE]
-  
-  # Get descendants of all body expressions
-  all_descendants <- data.frame()
-  for (body_id in body_exprs$id) {
-    descendants <- get_descendants(body_id, data)
-    all_descendants <- rbind(all_descendants, descendants)
+
+  # Get descendants of all body expressions - use indexed version if available
+  if (!is.null(index)) {
+    # Use indexed traversal with list accumulation
+    descendant_list <- list()
+    for (body_id in body_exprs$id) {
+      descendants <- get_descendants_indexed(body_id, index)
+      if (nrow(descendants) > 0) {
+        descendant_list[[length(descendant_list) + 1]] <- descendants
+      }
+    }
+    all_descendants <- if (length(descendant_list) > 0) {
+      do.call(rbind, descendant_list)
+    } else {
+      data[integer(0), , drop = FALSE]
+    }
+  } else {
+    # Fallback to legacy get_descendants (already fixed to use list accumulation)
+    descendant_list <- list()
+    for (body_id in body_exprs$id) {
+      descendants <- get_descendants(body_id, data)
+      if (nrow(descendants) > 0) {
+        descendant_list[[length(descendant_list) + 1]] <- descendants
+      }
+    }
+    all_descendants <- if (length(descendant_list) > 0) {
+      do.call(rbind, descendant_list)
+    } else {
+      data[integer(0), , drop = FALSE]
+    }
   }
-  
+
   # Look for SYMBOL_FUNCTION_CALL tokens that are "UseMethod"
-  usemethod_rows <- all_descendants[all_descendants$token == "SYMBOL_FUNCTION_CALL" & 
+  usemethod_rows <- all_descendants[all_descendants$token == "SYMBOL_FUNCTION_CALL" &
                                     all_descendants$text == "UseMethod", , drop = FALSE]
-  
+
   if (nrow(usemethod_rows) == 0) {
     return(list(is_generic = FALSE, generic_name = NULL))
   }
-  
+
   # Find the parent expr of UseMethod to get the argument
   usemethod_parent <- usemethod_rows$parent[1]
   parent_children <- data[data$parent == usemethod_parent, , drop = FALSE]
-  
+
   # Look for STR_CONST (string literal) which is the generic name argument
   str_const_rows <- parent_children[parent_children$token == "STR_CONST", , drop = FALSE]
-  
+
   if (nrow(str_const_rows) > 0) {
     # Extract string without quotes
     generic_name <- gsub("^['\"]|['\"]$", "", str_const_rows$text[1])
@@ -60,7 +85,7 @@ detect_s3_generic <- function(func_id, data) {
     # No explicit argument, generic name is the function name itself
     generic_name <- NULL
   }
-  
+
   list(is_generic = TRUE, generic_name = generic_name)
 }
 
@@ -139,60 +164,63 @@ extract_s3_symbols <- function(ast_module) {
   if (is.null(data) || nrow(data) == 0) {
     return(list())
   }
-  
+
+  # Build tree index once for O(1) lookups throughout this function
+  tree_index <- build_tree_index(data)
+
   s3_symbols <- list()
-  
+
   # Find all function definitions
   # Pattern: SYMBOL followed by assignment, then FUNCTION or OP-LAMBDA
   assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
   func_tokens <- c("FUNCTION", "OP-LAMBDA")
-  
+
   # Find function token rows
   func_rows <- data[data$token %in% func_tokens, , drop = FALSE]
-  
+
   for (idx in seq_len(nrow(func_rows))) {
     func_row <- func_rows[idx, ]
     func_id <- func_row$id
-    
+
     # Find the assignment expression that contains this function
     # Navigate up the tree to find the assignment
     parent_id <- func_row$parent
     parent_expr <- data[data$id == parent_id, , drop = FALSE]
-    
+
     if (nrow(parent_expr) == 0) next
-    
+
     # Look for SYMBOL on the same line and before this function
-    symbol_on_line <- data[data$line1 == func_row$line1 & 
-                           data$token == "SYMBOL" & 
+    symbol_on_line <- data[data$line1 == func_row$line1 &
+                           data$token == "SYMBOL" &
                            data$col1 < func_row$col1, , drop = FALSE]
-    
+
     if (nrow(symbol_on_line) == 0) next
-    
+
     # Get the closest SYMBOL (rightmost before FUNCTION)
     symbol_on_line <- symbol_on_line[order(symbol_on_line$col1, decreasing = TRUE), , drop = FALSE]
     func_name <- symbol_on_line$text[1]
     func_symbol_row <- symbol_on_line[1, ]
-    
-    # Check if this is an S3 generic (contains UseMethod)
-    generic_info <- detect_s3_generic(func_id, data)
-    
+
+    # Check if this is an S3 generic (contains UseMethod) - pass index for O(1) lookups
+    generic_info <- detect_s3_generic(func_id, data, tree_index)
+
     if (generic_info$is_generic) {
       # Determine the generic name
       # If UseMethod has an explicit argument, use that; otherwise use function name
       generic_name <- generic_info$generic_name %||% func_name
-      
+
       s3_symbols[[length(s3_symbols) + 1]] <- list(
         type = "s3_generic",
         func_name = func_name,
         generic_name = generic_name,
-        range = c(func_symbol_row$line1, func_symbol_row$col1, 
+        range = c(func_symbol_row$line1, func_symbol_row$col1,
                   func_symbol_row$line2, func_symbol_row$col2)
       )
     }
-    
+
     # Check if this is an S3 method (generic.class naming pattern)
     method_info <- parse_s3_method_name(func_name)
-    
+
     if (method_info$is_method) {
       s3_symbols[[length(s3_symbols) + 1]] <- list(
         type = "s3_method",
@@ -204,7 +232,7 @@ extract_s3_symbols <- function(ast_module) {
       )
     }
   }
-  
+
   s3_symbols
 }
 

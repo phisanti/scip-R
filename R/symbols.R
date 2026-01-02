@@ -34,6 +34,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   file_info <- ast_module$file_info %||% list(relative_path = basename(ast_module$file_info$path))
   relative_path <- file_info$relative_path %||% basename(file_info$path)
 
+  # Build tree index once for O(1) lookups throughout this function
+  tree_index <- build_tree_index(data)
+
   assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
   assignment_rows <- data[data$token %in% assignment_tokens, , drop = FALSE]
   symbols <- list()
@@ -54,9 +57,15 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
     if (row$token == "SYMBOL_FORMALS") {
       is_definition <- !(symbol_id %in% seen_symbols)
     } else {
-      # FIX 2: Check for loop variables (forcond parent)
-      parent_row <- get_parent(row$id, data)
-      is_loop_var <- nrow(parent_row) > 0 && parent_row$token[1] == "forcond"
+      # FIX 2: Check for loop variables (forcond parent) - use indexed lookup
+      parent_id <- get_parent_id_indexed(row$id, tree_index)
+      parent_token <- if (!is.na(parent_id)) {
+        row_idx <- get_row_indexed(parent_id, tree_index)
+        if (!is.na(row_idx)) data$token[row_idx] else NA
+      } else {
+        NA
+      }
+      is_loop_var <- !is.na(parent_token) && parent_token == "forcond"
 
       # Check for assignment
       on_assignment_line <- any(assignment_rows$line1 == row$line1 & assignment_rows$col1 > row$col1)
@@ -66,7 +75,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
     }
 
     role <- if (is_definition) "definition" else "reference"
-    kind <- determine_symbol_kind(row, data)
+    kind <- determine_symbol_kind_indexed(row, data, tree_index)
 
     if (is_definition) {
       symbols[[length(symbols) + 1]] <- list(
@@ -242,6 +251,48 @@ is_function_definition <- function(row, parse_data) {
   )
 }
 
+#' Check if symbol is defined as a function (indexed version).
+#'
+#' Uses tree index for O(1) lookups and early-exit DFS.
+#'
+#' @param row Parse-data row for the symbol.
+#' @param parse_data Full parse-data frame.
+#' @param index Tree index from build_tree_index().
+#' @return Logical indicating if this is a function definition.
+#' @keywords internal
+is_function_definition_indexed <- function(row, parse_data, index) {
+  # Find assignment on same line after this symbol
+  assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
+  assignment_rows <- find_on_same_line(
+    row$id,
+    parse_data,
+    assignment_tokens,
+    "after"
+  )
+
+  if (nrow(assignment_rows) == 0) {
+    return(FALSE)
+  }
+
+  # Get the closest assignment (smallest column position)
+  assignment_rows <- assignment_rows[order(assignment_rows$col1), , drop = FALSE]
+  assignment_row <- assignment_rows[1, ]
+
+  # Get the expression containing the assignment
+  assignment_expr <- get_assignment_expr(assignment_row$id, parse_data)
+
+  if (nrow(assignment_expr) == 0) {
+    return(FALSE)
+  }
+
+  # Check if the expression contains FUNCTION or OP-LAMBDA - use indexed early-exit DFS
+  has_descendant_of_type_indexed(
+    assignment_expr$id,
+    c("FUNCTION", "OP-LAMBDA"),
+    index
+  )
+}
+
 #' Determine the general kind for a symbol token.
 #'
 #' @param row Parse-data row for the symbol.
@@ -262,6 +313,44 @@ determine_symbol_kind <- function(row, parse_data) {
 
   # FIX 3: Robust function detection - MEDIUM IMPACT
   if (is_function_definition(row, parse_data)) {
+    return("function")
+  }
+
+  # Function calls
+  if (row$token == "SYMBOL_FUNCTION_CALL") {
+    return("call")
+  }
+
+  # Default: regular variable
+  "variable"
+}
+
+#' Determine the general kind for a symbol token (indexed version).
+#'
+#' Uses tree index for O(1) lookups and early-exit DFS.
+#'
+#' @param row Parse-data row for the symbol.
+#' @param parse_data Full parse-data frame.
+#' @param index Tree index from build_tree_index().
+#' @return Character label describing the symbol kind.
+#' @keywords internal
+determine_symbol_kind_indexed <- function(row, parse_data, index) {
+  # FIX 1: Function parameters (SYMBOL_FORMALS) - HIGH IMPACT
+  if (row$token == "SYMBOL_FORMALS") {
+    return("parameter")
+  }
+
+  # FIX 2: Loop variables (forcond parent) - use indexed lookup
+  parent_id <- get_parent_id_indexed(row$id, index)
+  if (!is.na(parent_id)) {
+    row_idx <- get_row_indexed(parent_id, index)
+    if (!is.na(row_idx) && parse_data$token[row_idx] == "forcond") {
+      return("variable")
+    }
+  }
+
+  # FIX 3: Robust function detection - use indexed version
+  if (is_function_definition_indexed(row, parse_data, index)) {
     return("function")
   }
 
