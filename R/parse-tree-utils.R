@@ -34,6 +34,7 @@ build_tree_index <- function(parse_data) {
       children = list(),
       parent = integer(0),
       rows = list(),
+      by_line = list(),
       data = parse_data
     ))
   }
@@ -47,10 +48,20 @@ build_tree_index <- function(parse_data) {
   # Pre-compute row indices: node_id -> row index in parse_data
   rows <- setNames(seq_len(nrow(parse_data)), as.character(parse_data$id))
 
+  # Pre-compute line index: line_number -> vector of row indices
+  by_line <- split(seq_len(nrow(parse_data)), parse_data$line1)
+
+  # Pre-compute which lines contain function definitions (FUNCTION or OP-LAMBDA tokens)
+  func_tokens <- c("FUNCTION", "OP-LAMBDA")
+  func_lines <- unique(parse_data$line1[parse_data$token %in% func_tokens])
+  has_func_on_line <- setNames(rep(TRUE, length(func_lines)), as.character(func_lines))
+
   list(
     children = children,
     parent = parent,
     rows = rows,
+    by_line = by_line,
+    has_func_on_line = has_func_on_line,
     data = parse_data
   )
 }
@@ -305,6 +316,30 @@ find_ancestor_of_type <- function(node_id, token_types, parse_data) {
   data.frame()  # Not found
 }
 
+#' Find first ancestor of a given token type using pre-computed index (O(depth)).
+#'
+#' @param node_id Numeric ID of the starting node.
+#' @param token_types Character vector of token types to search for.
+#' @param index Tree index from build_tree_index().
+#' @return Data.frame row containing the ancestor node, or empty data.frame if not found.
+#' @keywords internal
+find_ancestor_of_type_indexed <- function(node_id, token_types, index) {
+  current_id <- node_id
+
+  while (!is.na(current_id)) {
+    row_idx <- get_row_indexed(current_id, index)
+    if (is.na(row_idx)) break
+
+    if (index$data$token[row_idx] %in% token_types) {
+      return(index$data[row_idx, , drop = FALSE])
+    }
+
+    current_id <- get_parent_id_indexed(current_id, index)
+  }
+
+  index$data[integer(0), , drop = FALSE]  # Not found
+}
+
 #' Check if node has descendant of given type.
 #'
 #' Efficiently checks if any descendant node has one of the specified token types.
@@ -356,6 +391,50 @@ find_on_same_line <- function(node_id, parse_data, token_types = NULL, position 
 
   # Filter by line
   same_line <- parse_data[parse_data$line1 == line, , drop = FALSE]
+
+  # Filter by token type if specified
+  if (!is.null(token_types)) {
+    same_line <- same_line[same_line$token %in% token_types, , drop = FALSE]
+  }
+
+  # Filter by position if specified
+  if (!is.null(position)) {
+    if (position == "before") {
+      same_line <- same_line[same_line$col1 < col, , drop = FALSE]
+    } else if (position == "after") {
+      same_line <- same_line[same_line$col1 > col, , drop = FALSE]
+    }
+  }
+
+  # Exclude the node itself
+  same_line[same_line$id != node_id, , drop = FALSE]
+}
+
+#' Find nodes on the same line using pre-computed line index (O(1) line lookup).
+#'
+#' @param node_id Numeric ID of the reference node.
+#' @param index Tree index from build_tree_index().
+#' @param token_types Optional character vector of token types to filter by.
+#' @param position Optional: "before", "after", or NULL for all nodes on line.
+#' @return Data.frame subset containing nodes on the same line.
+#' @keywords internal
+find_on_same_line_indexed <- function(node_id, index, token_types = NULL, position = NULL) {
+  row_idx <- get_row_indexed(node_id, index)
+  if (is.na(row_idx)) {
+    return(index$data[integer(0), , drop = FALSE])
+  }
+
+  line <- index$data$line1[row_idx]
+  col <- index$data$col1[row_idx]
+
+  # O(1) lookup of row indices on this line
+  line_row_indices <- index$by_line[[as.character(line)]]
+  if (is.null(line_row_indices) || length(line_row_indices) == 0) {
+    return(index$data[integer(0), , drop = FALSE])
+  }
+
+  # Get subset of data for this line
+  same_line <- index$data[line_row_indices, , drop = FALSE]
 
   # Filter by token type if specified
   if (!is.null(token_types)) {

@@ -261,11 +261,20 @@ is_function_definition <- function(row, parse_data) {
 #' @return Logical indicating if this is a function definition.
 #' @keywords internal
 is_function_definition_indexed <- function(row, parse_data, index) {
-  # Find assignment on same line after this symbol
+  line <- row$line1
+
+  # FAST PATH: If no FUNCTION/OP-LAMBDA token on this line, can't be a function definition
+  # This avoids expensive subtree traversal for ~95% of cases
+  line_key <- as.character(line)
+  if (length(index$has_func_on_line) == 0 || !line_key %in% names(index$has_func_on_line)) {
+    return(FALSE)
+  }
+
+  # Find assignment on same line after this symbol - use indexed O(1) line lookup
   assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
-  assignment_rows <- find_on_same_line(
+  assignment_rows <- find_on_same_line_indexed(
     row$id,
-    parse_data,
+    index,
     assignment_tokens,
     "after"
   )
@@ -278,8 +287,8 @@ is_function_definition_indexed <- function(row, parse_data, index) {
   assignment_rows <- assignment_rows[order(assignment_rows$col1), , drop = FALSE]
   assignment_row <- assignment_rows[1, ]
 
-  # Get the expression containing the assignment
-  assignment_expr <- get_assignment_expr(assignment_row$id, parse_data)
+  # Get the expression containing the assignment - use indexed ancestor lookup
+  assignment_expr <- find_ancestor_of_type_indexed(assignment_row$id, "expr", index)
 
   if (nrow(assignment_expr) == 0) {
     return(FALSE)
