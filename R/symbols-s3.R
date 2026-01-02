@@ -165,14 +165,18 @@ extract_s3_symbols <- function(ast_module) {
     return(list())
   }
 
-  # Build tree index once for O(1) lookups throughout this function
-  tree_index <- build_tree_index(data)
+  # FAST PATH: Check if file has any UseMethod calls at all
+  # If not, we can skip expensive generic detection for all functions
+  usemethod_rows <- data[data$token == "SYMBOL_FUNCTION_CALL" & data$text == "UseMethod", , drop = FALSE]
+  has_usemethod <- nrow(usemethod_rows) > 0
+
+  # Build tree index only if we need it (for generic detection)
+  tree_index <- if (has_usemethod) build_tree_index(data) else NULL
 
   s3_symbols <- list()
 
   # Find all function definitions
   # Pattern: SYMBOL followed by assignment, then FUNCTION or OP-LAMBDA
-  assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
   func_tokens <- c("FUNCTION", "OP-LAMBDA")
 
   # Find function token rows
@@ -201,24 +205,28 @@ extract_s3_symbols <- function(ast_module) {
     func_name <- symbol_on_line$text[1]
     func_symbol_row <- symbol_on_line[1, ]
 
-    # Check if this is an S3 generic (contains UseMethod) - pass index for O(1) lookups
-    generic_info <- detect_s3_generic(func_id, data, tree_index)
+    # Check if this is an S3 generic (contains UseMethod)
+    # Only do expensive check if file has UseMethod calls
+    if (has_usemethod) {
+      generic_info <- detect_s3_generic(func_id, data, tree_index)
 
-    if (generic_info$is_generic) {
-      # Determine the generic name
-      # If UseMethod has an explicit argument, use that; otherwise use function name
-      generic_name <- generic_info$generic_name %||% func_name
+      if (generic_info$is_generic) {
+        # Determine the generic name
+        # If UseMethod has an explicit argument, use that; otherwise use function name
+        generic_name <- generic_info$generic_name %||% func_name
 
-      s3_symbols[[length(s3_symbols) + 1]] <- list(
-        type = "s3_generic",
-        func_name = func_name,
-        generic_name = generic_name,
-        range = c(func_symbol_row$line1, func_symbol_row$col1,
-                  func_symbol_row$line2, func_symbol_row$col2)
-      )
+        s3_symbols[[length(s3_symbols) + 1]] <- list(
+          type = "s3_generic",
+          func_name = func_name,
+          generic_name = generic_name,
+          range = c(func_symbol_row$line1, func_symbol_row$col1,
+                    func_symbol_row$line2, func_symbol_row$col2)
+        )
+      }
     }
 
     # Check if this is an S3 method (generic.class naming pattern)
+    # This is fast - just string parsing, no tree traversal
     method_info <- parse_s3_method_name(func_name)
 
     if (method_info$is_method) {
