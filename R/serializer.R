@@ -184,6 +184,12 @@ build_occurrence_message <- function(occurrence) {
   occ$symbol <- occurrence$symbol
   occ$range <- as.integer(occurrence$range)
   occ$symbol_roles <- role_to_bitset(occurrence$role)
+
+  # Add enclosing_range if present (for AST context)
+  if (!is.null(occurrence$enclosing_range)) {
+    occ$enclosing_range <- as.integer(occurrence$enclosing_range)
+  }
+
   occ
 }
 
@@ -247,9 +253,30 @@ build_symbol_information_message <- function(symbol_entry) {
   )
 
   # Add documentation if present
+  # SCIP documentation is repeated string - pass character vector directly
   if (!is.null(symbol_entry$documentation) && length(symbol_entry$documentation) > 0) {
-    sym$documentation <- as.list(symbol_entry$documentation)
+    # Ensure it's a character vector, filter empty strings
+    docs <- as.character(symbol_entry$documentation)
+    docs <- docs[nzchar(docs)]
+    if (length(docs) > 0) {
+      sym$documentation <- docs
+    }
   }
+
+  # Add relationships if present (for --refs support)
+  if (!is.null(symbol_entry$relationships) && length(symbol_entry$relationships) > 0) {
+    rel_msgs <- lapply(symbol_entry$relationships, function(rel) {
+      rel_msg <- RProtoBuf::new(RProtoBuf::P("scip.Relationship"))
+      rel_msg$symbol <- rel$symbol
+      if (isTRUE(rel$is_reference)) rel_msg$is_reference <- TRUE
+      if (isTRUE(rel$is_implementation)) rel_msg$is_implementation <- TRUE
+      if (isTRUE(rel$is_type_definition)) rel_msg$is_type_definition <- TRUE
+      if (isTRUE(rel$is_definition)) rel_msg$is_definition <- TRUE
+      rel_msg
+    })
+    sym$relationships <- rel_msgs
+  }
+
   sym
 }
 

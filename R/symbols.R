@@ -44,6 +44,10 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   occurrences <- list()
   seen_symbols <- character()
 
+  # Track definition scopes for relationship building
+  # Maps symbol_id -> list(node_id = expr_id, line1, col1, line2, col2)
+  definition_scopes <- list()
+
   # FIX 1: Include SYMBOL_FORMALS to detect function parameters
   symbol_rows <- data[data$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL", "SYMBOL_FORMALS"), ]
   symbol_rows <- symbol_rows[order(symbol_rows$line1, symbol_rows$col1), , drop = FALSE]
@@ -86,6 +90,14 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
         documentation = extract_roxygen_documentation(data, row$line1)
       )
       seen_symbols <- c(seen_symbols, symbol_id)
+
+      # Track scope for function definitions to build relationships later
+      if (kind == "function") {
+        scope_info <- get_function_scope(row, data, tree_index)
+        if (!is.null(scope_info)) {
+          definition_scopes[[symbol_id]] <- scope_info
+        }
+      }
     }
 
     occurrences[[length(occurrences) + 1]] <- list(
@@ -94,6 +106,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
       role = role
     )
   }
+
+  # Build relationships: for each function definition, find references within its scope
+  symbols <- build_symbol_relationships(symbols, occurrences, definition_scopes)
 
   # Extract S3 symbols (generics and methods)
   s3_symbols <- build_s3_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
@@ -212,48 +227,6 @@ build_symbol_id <- function(name, relative_path, namespace = NULL) {
 
 #' Check if symbol is defined as a function.
 #'
-#' Uses languageserver pattern: find assignment on same line, check RHS for FUNCTION token.
-#' This is more robust than checking siblings since it properly traverses the parse tree.
-#'
-#' @param row Parse-data row for the symbol.
-#' @param parse_data Full parse-data frame.
-#' @return Logical indicating if this is a function definition.
-#' @keywords internal
-is_function_definition <- function(row, parse_data) {
-  # Find assignment on same line after this symbol
-  assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
-  assignment_rows <- find_on_same_line(
-    row$id,
-    parse_data,
-    assignment_tokens,
-    "after"
-  )
-
-  if (nrow(assignment_rows) == 0) {
-    return(FALSE)
-  }
-
-  # Get the closest assignment (smallest column position)
-  assignment_rows <- assignment_rows[order(assignment_rows$col1), , drop = FALSE]
-  assignment_row <- assignment_rows[1, ]
-
-  # Get the expression containing the assignment
-  assignment_expr <- get_assignment_expr(assignment_row$id, parse_data)
-
-  if (nrow(assignment_expr) == 0) {
-    return(FALSE)
-  }
-
-  # Check if the expression contains FUNCTION or OP-LAMBDA
-  has_descendant_of_type(
-    assignment_expr$id,
-    c("FUNCTION", "OP-LAMBDA"),
-    parse_data
-  )
-}
-
-#' Check if symbol is defined as a function (indexed version).
-#'
 #' Uses tree index for O(1) lookups and early-exit DFS.
 #'
 #' @param row Parse-data row for the symbol.
@@ -305,38 +278,6 @@ is_function_definition_indexed <- function(row, parse_data, index) {
 
 #' Determine the general kind for a symbol token.
 #'
-#' @param row Parse-data row for the symbol.
-#' @param parse_data Full parse-data frame.
-#' @return Character label describing the symbol kind.
-#' @keywords internal
-determine_symbol_kind <- function(row, parse_data) {
-  # FIX 1: Function parameters (SYMBOL_FORMALS) - HIGH IMPACT
-  if (row$token == "SYMBOL_FORMALS") {
-    return("parameter")
-  }
-
-  # FIX 2: Loop variables (forcond parent) - HIGH IMPACT
-  parent_row <- get_parent(row$id, parse_data)
-  if (nrow(parent_row) > 0 && parent_row$token[1] == "forcond") {
-    return("variable")  # Loop variables are a special kind of variable definition
-  }
-
-  # FIX 3: Robust function detection - MEDIUM IMPACT
-  if (is_function_definition(row, parse_data)) {
-    return("function")
-  }
-
-  # Function calls
-  if (row$token == "SYMBOL_FUNCTION_CALL") {
-    return("call")
-  }
-
-  # Default: regular variable
-  "variable"
-}
-
-#' Determine the general kind for a symbol token (indexed version).
-#'
 #' Uses tree index for O(1) lookups and early-exit DFS.
 #'
 #' @param row Parse-data row for the symbol.
@@ -384,13 +325,13 @@ determine_symbol_kind_indexed <- function(row, parse_data, index) {
 merge_external_refs <- function(refs1, refs2) {
   if (length(refs1) == 0) return(refs2)
   if (length(refs2) == 0) return(refs1)
-  
+
   result <- refs1
-  
+
   for (pkg2 in refs2) {
     # Find matching package in refs1
     pkg_idx <- which(sapply(result, function(x) x$package == pkg2$package))
-    
+
     if (length(pkg_idx) == 0) {
       # New package, add it
       result[[length(result) + 1]] <- pkg2
@@ -399,6 +340,111 @@ merge_external_refs <- function(refs1, refs2) {
       result[[pkg_idx]]$symbols <- c(result[[pkg_idx]]$symbols, pkg2$symbols)
     }
   }
-  
+
   result
+}
+
+#' Get the scope (range) of a function definition.
+#'
+#' Given a symbol row that defines a function, finds the expression containing
+#' the entire function definition (including the body) and returns its range.
+#'
+#' @param row Parse-data row for the symbol being defined.
+#' @param parse_data Full parse-data frame.
+#' @param index Tree index from build_tree_index().
+#' @return List with line1, col1, line2, col2 of the function scope, or NULL if not found.
+#' @keywords internal
+get_function_scope <- function(row, parse_data, index) {
+  # Find the assignment expression containing this symbol
+  # The function body will be a descendant of this expression
+  assignment_row <- find_on_same_line_indexed(row$id, index, c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN"), "after")
+
+  if (nrow(assignment_row) == 0) {
+    return(NULL)
+  }
+
+  # Get the parent expression that contains the entire assignment
+  expr_row <- find_ancestor_of_type_indexed(assignment_row$id[1], "expr", index)
+
+  if (nrow(expr_row) == 0) {
+    return(NULL)
+  }
+
+  list(
+    node_id = expr_row$id[1],
+    line1 = expr_row$line1[1],
+    col1 = expr_row$col1[1],
+    line2 = expr_row$line2[1],
+    col2 = expr_row$col2[1]
+  )
+}
+
+#' Build relationships for symbols based on their scopes.
+#'
+#' For each symbol with a defined scope (e.g., function definitions), finds all
+#' reference occurrences within that scope and adds them as relationships.
+#'
+#' @param symbols List of symbol entries from resolve_symbols().
+#' @param occurrences List of occurrence entries from resolve_symbols().
+#' @param definition_scopes Named list mapping symbol_id to scope info.
+#' @return Updated symbols list with relationships field populated.
+#' @keywords internal
+build_symbol_relationships <- function(symbols, occurrences, definition_scopes) {
+  if (length(definition_scopes) == 0 || length(occurrences) == 0) {
+    return(symbols)
+  }
+
+  # For efficiency, build a lookup from symbol_id to symbol index
+  symbol_idx_map <- setNames(
+    seq_along(symbols),
+    vapply(symbols, function(s) s$symbol, character(1))
+  )
+
+  # Filter to reference occurrences only
+  ref_occurrences <- Filter(function(occ) identical(occ$role, "reference"), occurrences)
+
+  # For each definition with a scope, find references within that scope
+  for (def_symbol_id in names(definition_scopes)) {
+    scope <- definition_scopes[[def_symbol_id]]
+    sym_idx <- symbol_idx_map[[def_symbol_id]]
+
+    if (is.null(sym_idx)) next
+
+    # Find references that fall within this scope
+    # A reference is in scope if its range is contained within the scope range
+    refs_in_scope <- list()
+    seen_ref_symbols <- character()
+
+    for (ref_occ in ref_occurrences) {
+      ref_range <- ref_occ$range
+      ref_line <- ref_range[1]
+      ref_col <- ref_range[2]
+
+      # Check if reference is within scope (simple range containment)
+      in_scope <- (
+        (ref_line > scope$line1 || (ref_line == scope$line1 && ref_col >= scope$col1)) &&
+        (ref_line < scope$line2 || (ref_line == scope$line2 && ref_col <= scope$col2))
+      )
+
+      if (in_scope) {
+        ref_symbol <- ref_occ$symbol
+
+        # Skip self-references and duplicates
+        if (ref_symbol != def_symbol_id && !ref_symbol %in% seen_ref_symbols) {
+          refs_in_scope[[length(refs_in_scope) + 1]] <- list(
+            symbol = ref_symbol,
+            is_reference = TRUE
+          )
+          seen_ref_symbols <- c(seen_ref_symbols, ref_symbol)
+        }
+      }
+    }
+
+    # Add relationships to the symbol entry
+    if (length(refs_in_scope) > 0) {
+      symbols[[sym_idx]]$relationships <- refs_in_scope
+    }
+  }
+
+  symbols
 }
