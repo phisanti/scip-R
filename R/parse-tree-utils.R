@@ -43,10 +43,10 @@ build_tree_index <- function(parse_data) {
   children <- split(parse_data$id, parse_data$parent)
 
   # Pre-compute parent lookup: node_id -> parent_id
-  parent <- setNames(parse_data$parent, as.character(parse_data$id))
+  parent <- stats::setNames(parse_data$parent, as.character(parse_data$id))
 
   # Pre-compute row indices: node_id -> row index in parse_data
-  rows <- setNames(seq_len(nrow(parse_data)), as.character(parse_data$id))
+  rows <- stats::setNames(seq_len(nrow(parse_data)), as.character(parse_data$id))
 
   # Pre-compute line index: line_number -> vector of row indices
   by_line <- split(seq_len(nrow(parse_data)), parse_data$line1)
@@ -54,7 +54,7 @@ build_tree_index <- function(parse_data) {
   # Pre-compute which lines contain function definitions (FUNCTION or OP-LAMBDA tokens)
   func_tokens <- c("FUNCTION", "OP-LAMBDA")
   func_lines <- unique(parse_data$line1[parse_data$token %in% func_tokens])
-  has_func_on_line <- setNames(rep(TRUE, length(func_lines)), as.character(func_lines))
+  has_func_on_line <- stats::setNames(rep(TRUE, length(func_lines)), as.character(func_lines))
 
   list(
     children = children,

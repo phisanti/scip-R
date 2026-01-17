@@ -395,7 +395,7 @@ build_symbol_relationships <- function(symbols, occurrences, definition_scopes) 
   }
 
   # For efficiency, build a lookup from symbol_id to symbol index
-  symbol_idx_map <- setNames(
+  symbol_idx_map <- stats::setNames(
     seq_along(symbols),
     vapply(symbols, function(s) s$symbol, character(1))
   )
