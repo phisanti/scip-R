@@ -90,16 +90,16 @@ visualize_r6_parse_tree <- function(ast_module,
   data <- ast_module$parse_data
 
   if (is.null(data) || nrow(data) == 0) {
-    stop("No parse data available; did parse_file() run with keep.source = TRUE?")
+    cli::cli_abort("No parse data available; did {.fn parse_file} run with {.code keep.source = TRUE}?")
   }
 
   r6_rows <- data[data$token == "SYMBOL_FUNCTION_CALL" & data$text == "R6Class", , drop = FALSE]
   if (nrow(r6_rows) == 0) {
-    stop("No R6Class() calls found in this module.")
+    cli::cli_abort("No {.fn R6Class} calls found in this module.")
   }
 
   if (which < 1 || which > nrow(r6_rows)) {
-    stop(sprintf("`which` (%d) must be between 1 and %d.", which, nrow(r6_rows)))
+    cli::cli_abort("{.arg which} ({which}) must be between 1 and {nrow(r6_rows)}.")
   }
 
   call_row <- r6_rows[which, , drop = FALSE]

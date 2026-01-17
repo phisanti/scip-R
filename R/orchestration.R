@@ -112,13 +112,8 @@ index_documents_sequential <- function(files, workspace, output_path) {
     result <- tryCatch(
       process_single_file(file_info, workspace),
       error = function(e) {
-        warning(
-          sprintf(
-            "File %s could not be processed: %s",
-            file_info$relative_path %||% file_info$path,
-            conditionMessage(e)
-          ),
-          call. = FALSE
+        cli::cli_alert_warning(
+          "File {.path {file_info$relative_path %||% file_info$path}} could not be processed: {conditionMessage(e)}"
         )
         NULL
       }
@@ -203,7 +198,7 @@ validate_parallel_arg <- function(parallel_value) {
 
   # Validate non-negative
   if (parallel_value < 0) {
-    stop("--parallel must be >= 0", call. = FALSE)
+    cli::cli_abort("{.arg --parallel} must be >= 0")
   }
 
   # Sequential mode

@@ -47,11 +47,10 @@ NULL
 #' }
 install_scip_cli <- function(destdir = NULL) {
   if (!requireNamespace("Rapp", quietly = TRUE)) {
-    stop(
-      "Rapp package required for CLI installation.\n",
-      "Install with: remotes::install_github('r-lib/Rapp')",
-      call. = FALSE
-    )
+    cli::cli_abort(c(
+      "{.pkg Rapp} package required for CLI installation.",
+      "i" = "Install with: {.code remotes::install_github('r-lib/Rapp')}"
+    ))
   }
 
   if (is.null(destdir)) {

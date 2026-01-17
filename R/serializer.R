@@ -106,17 +106,19 @@ find_proto_path <- function(project_root) {
   existing <- candidates[file.exists(candidates)]
 
   if (length(existing) == 0) {
-    stop(
-      "Unable to locate scip.proto schema file.\n\n",
-      "Searched locations:\n",
-      if (nzchar(bundled)) paste0("  - Package bundle: ", bundled, "\n"),
-      if (nzchar(override)) paste0("  - SCIP_PROTO_PATH: ", override, "\n"),
-      "\nSolutions:\n",
-      "  1. Ensure scip.proto is present at: inst/scip.proto (for development)\n",
-      "  2. Set SCIP_PROTO_PATH environment variable to the proto file location\n",
-      "  3. Download from: https://github.com/sourcegraph/scip/blob/main/scip.proto",
-      call. = FALSE
+    searched <- c(
+      if (nzchar(bundled)) paste0("Package bundle: ", bundled),
+      if (nzchar(override)) paste0("SCIP_PROTO_PATH: ", override)
     )
+    cli::cli_abort(c(
+      "Unable to locate {.file scip.proto} schema file.",
+      "Searched locations:" = "",
+      stats::setNames(paste0("{.path ", searched, "}"), rep("*", length(searched))),
+      "Solutions:" = "",
+      "*" = "Ensure {.file scip.proto} is present at: {.path inst/scip.proto} (for development)",
+      "*" = "Set {.envvar SCIP_PROTO_PATH} environment variable to the proto file location",
+      "*" = "Download from: {.url https://github.com/sourcegraph/scip/blob/main/scip.proto}"
+    ))
   }
 
   proto_path <- normalizePath(existing[[1]], winslash = "/", mustWork = TRUE)

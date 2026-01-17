@@ -21,9 +21,10 @@ NULL
 #' }
 resolve_documents_mirai <- function(files, workspace, daemons = parallel::detectCores(logical = FALSE)) {
   if (!requireNamespace("mirai", quietly = TRUE)) {
-    stop("Package 'mirai' is required for parallel resolution.\n",
-         "Please install it via: install.packages('mirai')",
-         call. = FALSE)
+    cli::cli_abort(c(
+      "Package {.pkg mirai} is required for parallel resolution.",
+      "i" = "Install it via: {.code install.packages('mirai')}"
+    ))
   }
   daemons <- max(1L, daemons)
   mirai::daemons(daemons)
