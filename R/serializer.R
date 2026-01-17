@@ -245,6 +245,11 @@ build_symbol_information_message <- function(symbol_entry) {
     shiny_namespace = as.integer(kind_enum$Namespace), # 28
     as.integer(kind_enum$UnspecifiedKind)             # 0
   )
+
+  # Add documentation if present
+  if (!is.null(symbol_entry$documentation) && length(symbol_entry$documentation) > 0) {
+    sym$documentation <- as.list(symbol_entry$documentation)
+  }
   sym
 }
 

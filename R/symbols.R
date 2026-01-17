@@ -1,5 +1,6 @@
 #' @include utils.R
 #' @include parser.R
+#' @include documentation.R
 #' @include parse-tree-utils.R
 #' @include symbols-qualified.R
 #' @include symbols-s3.R
@@ -82,7 +83,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
         symbol = symbol_id,
         display_name = name,
         kind = kind,
-        documentation = NULL
+        documentation = extract_roxygen_documentation(data, row$line1)
       )
       seen_symbols <- c(seen_symbols, symbol_id)
     }

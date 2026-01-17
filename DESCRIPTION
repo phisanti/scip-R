@@ -32,6 +32,7 @@ Collate:
     'utils.R'
     'files.R'
     'parser.R'
+    'documentation.R'
     'parse-tree-utils.R'
     'symbols-shiny.R'
     'symbols-r6.R'
