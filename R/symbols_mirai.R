@@ -92,11 +92,15 @@ resolve_documents_mirai <- function(files, workspace, daemons = parallel::detect
   tasks <- lapply(seq_along(parsed_files), function(i) {
     ast <- parsed_files[[i]]
     file_info <- file_infos[[i]]
+    relative_path <- file_info$relative_path %||% basename(file_info$path)
+    # Get cached tree_index from Phase 2 if available
+    tree_index <- symbol_table$tree_indices[[relative_path]]
 
     mirai::mirai(
       {
         library(scipR)
-        analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = symbol_table)
+        # OPTIMIZATION: Reuse tree_index from Phase 2
+        analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = symbol_table, tree_index = tree_index)
         occurrences <- map_occurrences(analysis, ast)
         document <- build_document(file_info, occurrences, analysis)
         diagnostics <- collect_diagnostics(file_info, ast, analysis)
@@ -105,7 +109,8 @@ resolve_documents_mirai <- function(files, workspace, daemons = parallel::detect
       ast = ast,
       file_info = file_info,
       workspace = workspace,
-      symbol_table = symbol_table
+      symbol_table = symbol_table,
+      tree_index = tree_index
     )
   })
   bench_end(t_dispatch)

@@ -103,6 +103,8 @@ BASE_R_FUNCTIONS <- c(
 #' @keywords internal
 build_symbol_table <- function(parsed_files, workspace) {
   definitions <- list()
+  # Use environment for O(1) lookups in Phase 3
+  definitions_env <- new.env(hash = TRUE, parent = emptyenv())
   package_name <- workspace$metadata$project_name %||% "unknown"
   package_version <- workspace$metadata$project_version %||% "0.0.0-dev"
 
@@ -110,6 +112,16 @@ build_symbol_table <- function(parsed_files, workspace) {
   t_ns <- bench_start("phase2_parse_namespace")
   exports <- parse_namespace_exports(workspace$metadata$project_root)
   bench_end(t_ns, list(export_count = length(exports)))
+
+  # Create environment for fast export lookup
+  exports_env <- new.env(hash = TRUE, parent = emptyenv())
+  for (exp in exports) {
+    exports_env[[exp]] <- TRUE
+  }
+
+  # Cache tree indices: file_path -> tree_index
+  # This avoids rebuilding in Phase 3
+  tree_indices <- list()
 
   # First pass: collect all top-level definitions from all files
   for (ast_module in parsed_files) {
@@ -121,8 +133,11 @@ build_symbol_table <- function(parsed_files, workspace) {
     relative_path <- file_info$relative_path %||% basename(file_info$path %||% "unknown")
 
     # Find all top-level definitions in this file
+    # extract_top_level_definitions builds tree_index internally, so we capture it
     t_extract <- bench_start("phase2_extract_definitions", list(file = relative_path))
-    file_defs <- extract_top_level_definitions(ast_module)
+    extract_result <- extract_top_level_definitions_with_index(ast_module)
+    file_defs <- extract_result$definitions
+    tree_indices[[relative_path]] <- extract_result$tree_index
     bench_end(t_extract, list(definition_count = length(file_defs)))
 
     t_agg <- bench_start("phase2_aggregate_definitions", list(file = relative_path))
@@ -131,13 +146,14 @@ build_symbol_table <- function(parsed_files, workspace) {
 
       # If symbol already defined in another file, keep the first definition
       # (R loads files alphabetically in a package, but we'll use first-seen)
-      if (!name %in% names(definitions)) {
-        definitions[[name]] <- list(
+      # Use environment lookup for O(1) check
+      if (is.null(definitions_env[[name]])) {
+        def_record <- list(
           name = name,
           file = relative_path,
           kind = def$kind,
           line = def$line,
-          exported = name %in% exports,
+          exported = !is.null(exports_env[[name]]),
           symbol_id = build_global_symbol_id(
             name = name,
             package_name = package_name,
@@ -145,6 +161,8 @@ build_symbol_table <- function(parsed_files, workspace) {
             kind = def$kind
           )
         )
+        definitions[[name]] <- def_record
+        definitions_env[[name]] <- def_record
       }
     }
     bench_end(t_agg, list(total_definitions = length(definitions)))
@@ -152,9 +170,12 @@ build_symbol_table <- function(parsed_files, workspace) {
 
   list(
     definitions = definitions,
+    definitions_env = definitions_env,
     exports = exports,
+    exports_env = exports_env,
     package_name = package_name,
-    package_version = package_version
+    package_version = package_version,
+    tree_indices = tree_indices
   )
 }
 
@@ -228,19 +249,18 @@ build_local_symbol_id <- function(name, relative_path, scope_id = NULL) {
   paste("local", local_id)
 }
 
-#' Extract top-level definitions from a parsed AST module.
+#' Extract top-level definitions from a parsed AST module with tree index.
 #'
-#' Identifies functions, variables, and classes defined at the top level
-#' (not nested inside other functions).
+#' OPTIMIZATION: Returns both definitions AND the tree index so it can be
+#' reused in Phase 3 (symbol resolution), avoiding redundant tree building.
 #'
 #' @param ast_module Parsed AST module from parse_file().
-#' @return List of definition records with name, kind, line fields.
+#' @return List with: definitions (list), tree_index (index structure).
 #' @keywords internal
-extract_top_level_definitions <- function(ast_module) {
-
+extract_top_level_definitions_with_index <- function(ast_module) {
   data <- ast_module$parse_data
   if (is.null(data) || nrow(data) == 0) {
-    return(list())
+    return(list(definitions = list(), tree_index = NULL))
   }
 
   definitions <- list()
@@ -249,10 +269,12 @@ extract_top_level_definitions <- function(ast_module) {
   tree_index <- build_tree_index(data)
   bench_end(t_tree)
 
-  # Pre-compute set of node IDs inside function bodies (O(n) once, then O(1) lookups)
+  # Pre-compute set of node IDs inside function bodies
+  # Use the pre-computed inside_function logical vector from tree_index for O(1) lookup
   t_precompute <- bench_start("phase2_precompute_function_scope", list(row_count = nrow(data)))
-  inside_function_ids <- compute_inside_function_ids(data, tree_index)
-  bench_end(t_precompute, list(inside_count = length(inside_function_ids)))
+  # tree_index$inside_function is already a logical vector indexed by row
+  # We just need to match assignment rows against it
+  bench_end(t_precompute, list(inside_count = sum(tree_index$inside_function %||% 0)))
 
   # Find all assignment tokens
   t_find <- bench_start("phase2_find_assignments", list(row_count = nrow(data)))
@@ -265,11 +287,16 @@ extract_top_level_definitions <- function(ast_module) {
   func_token_rows <- data[data$token %in% func_tokens, , drop = FALSE]
 
   t_analyze <- bench_start("phase2_analyze_assignments", list(assignment_count = nrow(assignment_rows)))
+  # Get inside_function mask for O(1) lookup by row index
+  inside_func_mask <- tree_index$inside_function %||% logical(nrow(data))
+
   for (i in seq_len(nrow(assignment_rows))) {
     assign_row <- assignment_rows[i, ]
 
     # O(1) check: is this assignment inside a function body?
-    if (as.character(assign_row$id) %in% inside_function_ids) {
+    # Use row index from tree_index for direct lookup
+    row_idx <- tree_index$rows[[as.character(assign_row$id)]]
+    if (!is.na(row_idx) && isTRUE(inside_func_mask[row_idx])) {
       next
     }
 
@@ -297,7 +324,20 @@ extract_top_level_definitions <- function(ast_module) {
   }
   bench_end(t_analyze, list(definition_count = length(definitions)))
 
-  definitions
+  list(definitions = definitions, tree_index = tree_index)
+}
+
+#' Extract top-level definitions from a parsed AST module.
+#'
+#' Identifies functions, variables, and classes defined at the top level
+#' (not nested inside other functions).
+#'
+#' @param ast_module Parsed AST module from parse_file().
+#' @return List of definition records with name, kind, line fields.
+#' @keywords internal
+extract_top_level_definitions <- function(ast_module) {
+  # Delegate to the new function but only return definitions for backward compat
+  extract_top_level_definitions_with_index(ast_module)$definitions
 }
 
 #' Pre-compute all node IDs that are inside function bodies.

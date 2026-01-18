@@ -37,7 +37,7 @@ NULL
 #' symbol_table <- build_symbol_table(parsed_files, workspace)
 #' resolve_symbols(ast, workspace, symbol_table = symbol_table)
 #' }
-resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbol_table = NULL) {
+resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbol_table = NULL, tree_index = NULL) {
   data <- ast_module$parse_data
   if (is.null(data) || nrow(data) == 0) {
     return(list(symbols = list(), occurrences = list(), external_refs = list()))
@@ -46,30 +46,50 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   file_info <- ast_module$file_info %||% list(relative_path = basename(ast_module$file_info$path))
   relative_path <- file_info$relative_path %||% basename(file_info$path)
 
-  # Build tree index once for O(1) lookups throughout this function
-  t_idx <- bench_start("build_tree_index", list(row_count = nrow(data)))
-  tree_index <- build_tree_index(data)
-  bench_end(t_idx)
+  # OPTIMIZATION: Reuse tree index from Phase 2 if available, otherwise build it
+  if (is.null(tree_index)) {
+    t_idx <- bench_start("build_tree_index", list(row_count = nrow(data)))
+    tree_index <- build_tree_index(data)
+    bench_end(t_idx)
+  } else {
+    bench_count("tree_index_reuse")
+  }
 
+  # Pre-compute assignment positions for O(1) line lookup
+  # Use environment for fast "is there assignment on this line" check
   assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
   assignment_rows <- data[data$token %in% assignment_tokens, , drop = FALSE]
+  assignment_by_line <- new.env(hash = TRUE, parent = emptyenv())
+  for (i in seq_len(nrow(assignment_rows))) {
+    line_key <- as.character(assignment_rows$line1[i])
+    if (is.null(assignment_by_line[[line_key]])) {
+      assignment_by_line[[line_key]] <- list()
+    }
+    assignment_by_line[[line_key]][[length(assignment_by_line[[line_key]]) + 1]] <- assignment_rows$col1[i]
+  }
+
   symbols <- list()
   occurrences <- list()
-  seen_symbols <- character()
+  # OPTIMIZATION: Use environment for O(1) seen symbol check instead of %in%
+  seen_symbols_env <- new.env(hash = TRUE, parent = emptyenv())
 
   # Track definition scopes for relationship building
-  # Maps symbol_id -> list(node_id = expr_id, line1, col1, line2, col2)
   definition_scopes <- list()
 
-  # Track current function scope for local variable resolution
-  # This helps identify truly local symbols (params, loop vars, nested vars)
-  current_scope_stack <- list()
+  # LAZY LOCAL SYMBOL CREATION: Create local symbols on-demand
+  # Maps position_key -> symbol_id for deduplication
+  local_symbol_registry <- new.env(hash = TRUE, parent = emptyenv())
+  local_counter <- 0L
+
+  # Get definitions_env from symbol_table for O(1) lookups
+  definitions_env <- if (!is.null(symbol_table)) symbol_table$definitions_env else NULL
 
   # FIX 1: Include SYMBOL_FORMALS to detect function parameters
   symbol_rows <- data[data$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL", "SYMBOL_FORMALS"), ]
   symbol_rows <- symbol_rows[order(symbol_rows$line1, symbol_rows$col1), , drop = FALSE]
 
-  for (idx in seq_len(nrow(symbol_rows))) {
+  n_symbols <- nrow(symbol_rows)
+  for (idx in seq_len(n_symbols)) {
     bench_count("symbol_iteration")
     row <- symbol_rows[idx, ]
     name <- row$text
@@ -84,15 +104,21 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
       # FIX 2: Check for loop variables (forcond parent) - use indexed lookup
       parent_id <- get_parent_id_indexed(row$id, tree_index)
       parent_token <- if (!is.na(parent_id)) {
-        row_idx <- get_row_indexed(parent_id, tree_index)
-        if (!is.na(row_idx)) data$token[row_idx] else NA
+        row_idx_val <- get_row_indexed(parent_id, tree_index)
+        if (!is.na(row_idx_val)) data$token[row_idx_val] else NA
       } else {
         NA
       }
       is_loop_var <- !is.na(parent_token) && parent_token == "forcond"
 
-      # Check for assignment
-      on_assignment_line <- any(assignment_rows$line1 == row$line1 & assignment_rows$col1 > row$col1)
+      # Check for assignment - O(1) line lookup
+      line_key <- as.character(row$line1)
+      line_assignments <- assignment_by_line[[line_key]]
+      on_assignment_line <- if (!is.null(line_assignments)) {
+        any(vapply(line_assignments, function(col) col > row$col1, logical(1)))
+      } else {
+        FALSE
+      }
 
       is_definition <- is_loop_var || (row$token == "SYMBOL" && on_assignment_line)
 
@@ -103,22 +129,21 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         is_inside_function_indexed(row$id, tree_index)
     }
 
-    # Resolve the symbol ID using the symbol table or fallback
-    resolved <- resolve_symbol_id(
+    # LAZY LOCAL SYMBOL CREATION: Resolve symbol with environment lookups
+    symbol_id <- resolve_symbol_id_fast(
       name = name,
       kind = kind,
       is_definition = is_definition,
       is_local_scope = is_local_scope,
       is_call = (row$token == "SYMBOL_FUNCTION_CALL"),
       relative_path = relative_path,
-      symbol_table = symbol_table,
-      workspace = workspace
+      definitions_env = definitions_env,
+      local_registry = local_symbol_registry,
+      local_counter_env = environment()  # For updating local_counter
     )
 
-    symbol_id <- resolved$symbol_id
-
     # For definitions in this file, check if we've already seen this symbol
-    if (is_definition && symbol_id %in% seen_symbols) {
+    if (is_definition && !is.null(seen_symbols_env[[symbol_id]])) {
       is_definition <- FALSE
     }
 
@@ -131,7 +156,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         kind = kind,
         documentation = extract_roxygen_documentation(data, row$line1)
       )
-      seen_symbols <- c(seen_symbols, symbol_id)
+      seen_symbols_env[[symbol_id]] <- TRUE
 
       # Track scope for function definitions to build relationships later
       if (kind == "function") {
@@ -407,6 +432,68 @@ resolve_symbol_id <- function(name, kind, is_definition, is_local_scope,
   bench_end(t_resolve, list(resolved_to = "local", lookup_type = "unresolved"))
   bench_count("phase3_lookup_unresolved")
   result
+}
+
+#' Fast symbol ID resolution using environment lookups.
+#'
+#' OPTIMIZATION: Uses O(1) environment lookups instead of named list access.
+#' Implements lazy local symbol creation - only creates local symbols when needed.
+#'
+#' @param name Symbol name.
+#' @param kind Symbol kind.
+#' @param is_definition Whether this is a definition.
+#' @param is_local_scope Whether in local scope.
+#' @param is_call Whether this is a function call.
+#' @param relative_path Current file path.
+#' @param definitions_env Environment from symbol_table$definitions_env (or NULL).
+#' @param local_registry Environment for lazy local symbol creation.
+#' @param local_counter_env Environment containing local_counter variable.
+#' @return Symbol ID string.
+#' @keywords internal
+resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
+                                    is_call, relative_path, definitions_env,
+                                    local_registry, local_counter_env) {
+  bench_count("phase3_resolve_fast")
+
+  # If no definitions_env, fall back to local symbol
+  if (is.null(definitions_env)) {
+    bench_count("phase3_fast_no_table")
+    return(build_local_symbol_id(name, relative_path))
+  }
+
+  # For truly local symbols (params, loop vars, vars inside functions),
+  # use local symbol IDs unless it's a function call that might resolve globally
+  if (is_local_scope && is_definition && kind != "function") {
+    bench_count("phase3_fast_local_def")
+    return(build_local_symbol_id(name, relative_path))
+  }
+
+  # O(1) lookup in definitions environment
+  def <- definitions_env[[name]]
+  if (!is.null(def)) {
+    bench_count("phase3_fast_table_hit")
+    return(def$symbol_id)
+  }
+
+  # For function calls, check base R
+  if (is_call && is_base_r_function(name)) {
+    bench_count("phase3_fast_base_r")
+    return(build_external_symbol_id(name, "base", get_r_version(), "function"))
+  }
+
+  # LAZY LOCAL SYMBOL CREATION:
+  # Create local symbol on-demand, deduplicate by name within file
+  bench_count("phase3_fast_local_lazy")
+  local_key <- paste0(relative_path, "#", name)
+  existing <- local_registry[[local_key]]
+  if (!is.null(existing)) {
+    return(existing)
+  }
+
+  # Create new local symbol
+  symbol_id <- build_local_symbol_id(name, relative_path)
+  local_registry[[local_key]] <- symbol_id
+  symbol_id
 }
 
 #' Check if symbol is defined as a function.

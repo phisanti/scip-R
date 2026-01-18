@@ -163,6 +163,7 @@ index_documents_sequential <- function(files, workspace, output_path) {
   )
 
   # Phase 3: Resolve symbols and serialize
+  # OPTIMIZATION: Reuse tree indices from Phase 2
   cli::cli_alert_info("Phase 3: Resolving symbols and serializing...")
   t_phase3 <- bench_start("phase3_resolve_serialize", list(file_count = length(parsed_files)))
   all_external_refs <- list()
@@ -170,10 +171,14 @@ index_documents_sequential <- function(files, workspace, output_path) {
   for (i in seq_along(parsed_files)) {
     ast <- parsed_files[[i]]
     file_info <- file_infos[[i]]
+    relative_path <- file_info$relative_path %||% basename(file_info$path)
 
-    t_proc <- bench_start("phase3_process_file", list(file = file_info$relative_path %||% basename(file_info$path)))
+    # Get cached tree_index from Phase 2 if available
+    tree_index <- symbol_table$tree_indices[[relative_path]]
+
+    t_proc <- bench_start("phase3_process_file", list(file = relative_path))
     result <- tryCatch(
-      process_single_file_with_table(file_info, ast, workspace, symbol_table),
+      process_single_file_with_table(file_info, ast, workspace, symbol_table, tree_index = tree_index),
       error = function(e) {
         cli::cli_alert_warning(
           "Resolution failed for {.path {file_info$relative_path %||% file_info$path}}: {conditionMessage(e)}"
@@ -264,10 +269,11 @@ process_single_file <- function(file_info, workspace) {
 #'     \item{external_refs}{Symbols from external packages}
 #'   }
 #' @keywords internal
-process_single_file_with_table <- function(file_info, ast, workspace, symbol_table) {
+process_single_file_with_table <- function(file_info, ast, workspace, symbol_table, tree_index = NULL) {
   # Resolve symbols with cross-file resolution via symbol table
+  # OPTIMIZATION: Reuse tree_index from Phase 2 if available
   t_resolve <- bench_start("phase3_resolve_symbols", list(file = file_info$relative_path %||% basename(file_info$path)))
-  analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = symbol_table)
+  analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = symbol_table, tree_index = tree_index)
   bench_end(t_resolve, list(symbol_count = length(analysis$symbols), occurrence_count = length(analysis$occurrences)))
 
   # Map symbols to occurrence positions
