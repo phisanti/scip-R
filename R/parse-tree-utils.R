@@ -190,7 +190,6 @@ build_scope_index <- function(parse_data, rows, parent) {
 #' @keywords internal
 build_scope_index_r <- function(parse_data, func_mask, func_ids, func_line1, func_col1, func_line2, func_col2) {
   n <- nrow(parse_data)
-  nf <- length(func_ids)
 
   # Build a data frame with function positions
   func_rows <- data.frame(

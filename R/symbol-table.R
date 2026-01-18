@@ -10,7 +10,6 @@ NULL
 # Well-known base R functions that should resolve to base:: package
 # This is a curated list of commonly used base R functions
 BASE_R_FUNCTIONS <- c(
-
   # Core functions
   "c", "list", "vector", "matrix", "array", "data.frame", "factor",
   "length", "nrow", "ncol", "dim", "names", "rownames", "colnames",
@@ -20,10 +19,8 @@ BASE_R_FUNCTIONS <- c(
   "as.character", "as.numeric", "as.integer", "as.logical", "as.list",
   "as.vector", "as.matrix", "as.data.frame", "as.factor",
   # Math functions
-
   "sum", "mean", "median", "var", "sd", "min", "max", "range",
-
-"abs", "sqrt", "exp", "log", "log10", "log2", "sin", "cos", "tan",
+  "abs", "sqrt", "exp", "log", "log10", "log2", "sin", "cos", "tan",
   "floor", "ceiling", "round", "trunc", "sign",
   # String functions
   "paste", "paste0", "sprintf", "format", "nchar", "substr", "substring",
@@ -191,11 +188,8 @@ build_symbol_table <- function(parsed_files, workspace) {
 #' @return SCIP symbol ID string.
 #' @keywords internal
 build_global_symbol_id <- function(name, package_name, package_version, kind = "function") {
-  # Format: scip-r r <package> <version> <name>().
-  # The suffix depends on kind:
-  #   - function: name().
-  #   - variable: name.
-  #   - class (R6/S4): name#
+  # Format: scip-r r <package> <version> <suffix>
+  # Suffix: functions get "()", variables get ".", classes get "#"
   suffix <- switch(
     kind,
     `function` = paste0(name, "()."),
@@ -422,42 +416,6 @@ is_function_assignment_fast <- function(assign_row, func_token_rows) {
   any(matches)
 }
 
-#' Check if an assignment is at the top level (not nested in a function).
-#'
-#' @param assign_row Parse data row for the assignment token.
-#' @param parse_data Full parse data frame.
-#' @param tree_index Tree index for lookups.
-#' @return TRUE if top-level, FALSE otherwise.
-#' @keywords internal
-is_top_level_assignment <- function(assign_row, parse_data, tree_index) {
-  # Walk up the tree looking for FUNCTION tokens
-  # If we find one before reaching the root, this is nested
-  current_id <- assign_row$id
-
-  while (!is.na(current_id)) {
-    parent_id <- get_parent_id_indexed(current_id, tree_index)
-    if (is.na(parent_id)) {
-      break
-    }
-
-    row_idx <- get_row_indexed(parent_id, tree_index)
-    if (is.na(row_idx)) {
-      break
-    }
-
-    parent_token <- parse_data$token[row_idx]
-
-    # If we hit a FUNCTION token, this assignment is inside a function body
-    if (parent_token == "FUNCTION") {
-      return(FALSE)
-    }
-
-    current_id <- parent_id
-  }
-
-  TRUE
-}
-
 #' Find the symbol being assigned to in an assignment expression.
 #'
 #' @param assign_row Parse data row for the assignment token.
@@ -483,29 +441,6 @@ find_assignment_target <- function(assign_row, parse_data, tree_index) {
 
   # Return the closest symbol (highest column) before the assignment
   candidates[which.max(candidates$col1), ]
-}
-
-#' Check if an assignment creates a function.
-#'
-#' @param assign_row Parse data row for the assignment token.
-#' @param parse_data Full parse data frame.
-#' @param tree_index Tree index for lookups.
-#' @return TRUE if assigning a function, FALSE otherwise.
-#' @keywords internal
-is_function_assignment <- function(assign_row, parse_data, tree_index) {
-  # Find the parent expression containing this assignment
-  expr_row <- find_ancestor_of_type_indexed(assign_row$id, "expr", tree_index)
-
-  if (nrow(expr_row) == 0) {
-    return(FALSE)
-  }
-
-  # Check if the expression contains FUNCTION or OP-LAMBDA
-  has_descendant_of_type_indexed(
-    expr_row$id[1],
-    c("FUNCTION", "OP-LAMBDA"),
-    tree_index
-  )
 }
 
 #' Parse NAMESPACE file to get exported symbols.

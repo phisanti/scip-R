@@ -295,10 +295,10 @@ build_external_symbol_messages <- function(externals) {
     }
     pkg_name <- entry$package %||% "unknown"
     pkg_version <- entry$version %||% "0.0.0"
-    
+
     for (sym_info in entry$symbols) {
       sym <- RProtoBuf::new(RProtoBuf::P("scip.SymbolInformation"))
-      
+
       # Handle both old format (string) and new format (list with name field)
       if (is.character(sym_info)) {
         sym_name <- sym_info
@@ -307,7 +307,7 @@ build_external_symbol_messages <- function(externals) {
       } else {
         next
       }
-      
+
       # Build SCIP symbol descriptor
       sym$symbol <- sprintf("scip-r %s %s %s().", pkg_name, pkg_version, sym_name)
       msgs[[length(msgs) + 1]] <- sym
