@@ -1,6 +1,7 @@
 #' @include workspace.R
 #' @include files.R
 #' @include parser.R
+#' @include symbol-table.R
 #' @include symbols.R
 #' @include occurrences.R
 #' @include diagnostics.R
@@ -11,6 +12,11 @@ NULL
 # This module coordinates the end-to-end indexing workflow, from workspace
 # analysis through file discovery, parsing, symbol resolution, and SCIP
 # serialization. It provides both sequential and parallel execution paths.
+#
+# Key architectural change (cross-file references):
+# The pipeline now includes a symbol table building phase between parsing
+# and symbol resolution. This enables cross-file reference tracking by
+# collecting all package-level definitions before resolving references.
 
 #' Index a project and generate a SCIP file.
 #'
@@ -86,9 +92,13 @@ index_project <- function(cfg) {
 
 #' Sequential indexing fallback when parallel mode is disabled.
 #'
-#' Processes files one at a time: parse → resolve → serialize.
-#' Benchmarks show this is fastest for small projects (<10 files) where
-#' mirai startup overhead exceeds parallelization benefits.
+#' Processes files in three phases:
+#' 1. Parse all files to collect ASTs
+#' 2. Build package-wide symbol table for cross-file resolution
+#' 3. Resolve symbols and serialize documents
+#'
+#' This enables cross-file reference tracking: when file A calls a function
+#' defined in file B, the reference points to the same symbol ID as the definition.
 #'
 #' @param files File descriptor list from `discover_files()`.
 #' @param workspace Workspace metadata list from `analyze_workspace()`.
@@ -99,7 +109,10 @@ index_documents_sequential <- function(files, workspace, output_path) {
   serializer <- init_serializer(output_path, workspace)
   on.exit(close_serializer(serializer), add = TRUE)
 
-  all_external_refs <- list()
+  # Phase 1: Parse all files
+  cli::cli_alert_info("Phase 1: Parsing {.val {length(files)}} files...")
+  parsed_files <- list()
+  file_infos <- list()
 
   for (file_info in files) {
     # Skip files marked as not needing indexing
@@ -108,12 +121,42 @@ index_documents_sequential <- function(files, workspace, output_path) {
       next
     }
 
-    # Process file with error recovery
-    result <- tryCatch(
-      process_single_file(file_info, workspace),
+    ast <- tryCatch(
+      parse_file(file_info),
       error = function(e) {
         cli::cli_alert_warning(
-          "File {.path {file_info$relative_path %||% file_info$path}} could not be processed: {conditionMessage(e)}"
+          "Parse failed for {.path {file_info$relative_path %||% file_info$path}}: {conditionMessage(e)}"
+        )
+        NULL
+      }
+    )
+
+    if (!is.null(ast)) {
+      parsed_files[[length(parsed_files) + 1]] <- ast
+      file_infos[[length(file_infos) + 1]] <- file_info
+    }
+  }
+
+  # Phase 2: Build symbol table for cross-file resolution
+  cli::cli_alert_info("Phase 2: Building symbol table...")
+  symbol_table <- build_symbol_table(parsed_files, workspace)
+  cli::cli_alert_success(
+    "Found {.val {length(symbol_table$definitions)}} package-level definitions"
+  )
+
+  # Phase 3: Resolve symbols and serialize
+  cli::cli_alert_info("Phase 3: Resolving symbols and serializing...")
+  all_external_refs <- list()
+
+  for (i in seq_along(parsed_files)) {
+    ast <- parsed_files[[i]]
+    file_info <- file_infos[[i]]
+
+    result <- tryCatch(
+      process_single_file_with_table(file_info, ast, workspace, symbol_table),
+      error = function(e) {
+        cli::cli_alert_warning(
+          "Resolution failed for {.path {file_info$relative_path %||% file_info$path}}: {conditionMessage(e)}"
         )
         NULL
       }
@@ -125,6 +168,7 @@ index_documents_sequential <- function(files, workspace, output_path) {
 
     # Write document and accumulate external references
     write_document(serializer, result$document, diagnostics = result$diagnostics)
+
     if (length(result$external_refs) > 0) {
       all_external_refs <- merge_external_refs(all_external_refs, result$external_refs)
     }
@@ -139,7 +183,8 @@ index_documents_sequential <- function(files, workspace, output_path) {
 #' Process a single file through the indexing pipeline.
 #'
 #' Coordinates the parse → resolve → occurrences → document workflow
-#' for a single R source file.
+#' for a single R source file. This version parses the file and does not
+#' use cross-file symbol resolution (kept for backwards compatibility).
 #'
 #' @param file_info File descriptor list containing path, relative_path, etc.
 #' @param workspace Workspace metadata list.
@@ -154,8 +199,46 @@ process_single_file <- function(file_info, workspace) {
   # Parse source file into AST
   ast <- parse_file(file_info)
 
-  # Resolve symbols and track external package references
-  analysis <- resolve_symbols(ast, workspace, track_externals = TRUE)
+  # Resolve symbols and track external package references (no cross-file resolution)
+  analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = NULL)
+
+  # Map symbols to occurrence positions
+  occurrences <- map_occurrences(analysis, ast)
+
+  # Build SCIP document message
+  document <- build_document(file_info, occurrences, analysis)
+
+  # Collect any diagnostics (parse errors, resolution warnings, etc.)
+  diagnostics <- collect_diagnostics(file_info, ast, analysis)
+
+  list(
+    document = document,
+    diagnostics = diagnostics,
+    external_refs = analysis$external_refs
+  )
+}
+
+#' Process a single file with a pre-built symbol table.
+#'
+#' This version takes an already-parsed AST and uses the package-wide symbol
+#' table for cross-file reference resolution. When file A calls a function
+#' defined in file B, the reference will point to the same symbol ID as
+#' the definition in file B.
+#'
+#' @param file_info File descriptor list containing path, relative_path, etc.
+#' @param ast Pre-parsed AST module from parse_file().
+#' @param workspace Workspace metadata list.
+#' @param symbol_table Symbol table from build_symbol_table().
+#' @return List with components:
+#'   \describe{
+#'     \item{document}{SCIP Document message}
+#'     \item{diagnostics}{SCIP Diagnostic messages}
+#'     \item{external_refs}{Symbols from external packages}
+#'   }
+#' @keywords internal
+process_single_file_with_table <- function(file_info, ast, workspace, symbol_table) {
+  # Resolve symbols with cross-file resolution via symbol table
+  analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = symbol_table)
 
   # Map symbols to occurrence positions
   occurrences <- map_occurrences(analysis, ast)

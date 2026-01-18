@@ -1,4 +1,5 @@
 #' @include parser.R
+#' @include symbol-table.R
 #' @include symbols.R
 #' @include occurrences.R
 #' @include diagnostics.R
@@ -6,9 +7,18 @@ NULL
 
 # This script introduces mirai-powered parallel symbol resolution for documents.
 # It evaluates parsing, symbol extraction, and document construction concurrently.
-# Future steps should reuse persistent daemons across indexing runs for amortized startup.
+#
+# Architecture for cross-file resolution:
+# 1. Parse all files serially (fast, I/O bound)
+# 2. Build symbol table serially (requires all parsed files)
+# 3. Resolve symbols in parallel with shared symbol table
 
 #' Resolve documents in parallel using mirai daemons.
+#'
+#' Uses a three-phase approach for cross-file reference resolution:
+#' 1. Parse all files (serial - I/O bound, fast)
+#' 2. Build symbol table (serial - needs all files)
+#' 3. Resolve and serialize in parallel (CPU bound)
 #'
 #' @param files List of file descriptors from `discover_files()`.
 #' @param workspace Workspace context obtained via `analyze_workspace()`.
@@ -26,25 +36,68 @@ resolve_documents_mirai <- function(files, workspace, daemons = parallel::detect
       "i" = "Install it via: {.code install.packages('mirai')}"
     ))
   }
+
+  # Phase 1: Parse all files serially (I/O bound, very fast)
+  cli::cli_alert_info("Phase 1: Parsing {.val {length(files)}} files...")
+  parsed_files <- list()
+  file_infos <- list()
+
+  for (file_info in files) {
+    needs_index <- file_info$needs_index
+    if (!is.null(needs_index) && isFALSE(needs_index)) {
+      next
+    }
+
+    ast <- tryCatch(
+      parse_file(file_info),
+      error = function(e) {
+        cli::cli_alert_warning(
+          "Parse failed for {.path {file_info$relative_path %||% file_info$path}}: {conditionMessage(e)}"
+        )
+        NULL
+      }
+    )
+
+    if (!is.null(ast)) {
+      parsed_files[[length(parsed_files) + 1]] <- ast
+      file_infos[[length(file_infos) + 1]] <- file_info
+    }
+  }
+
+  # Phase 2: Build symbol table (requires all parsed files)
+  cli::cli_alert_info("Phase 2: Building symbol table...")
+  symbol_table <- build_symbol_table(parsed_files, workspace)
+  cli::cli_alert_success(
+    "Found {.val {length(symbol_table$definitions)}} package-level definitions"
+  )
+
+  # Phase 3: Resolve symbols in parallel
+  cli::cli_alert_info("Phase 3: Resolving symbols in parallel with {.val {daemons}} workers...")
+
   daemons <- max(1L, daemons)
   mirai::daemons(daemons)
   on.exit(mirai::daemons(0), add = TRUE)
 
-  tasks <- lapply(files, function(file_info) {
+  tasks <- lapply(seq_along(parsed_files), function(i) {
+    ast <- parsed_files[[i]]
+    file_info <- file_infos[[i]]
+
     mirai::mirai(
       {
         library(scipR)
-        ast <- parse_file(file_info)
-        analysis <- resolve_symbols(ast, workspace, track_externals = TRUE)
+        analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = symbol_table)
         occurrences <- map_occurrences(analysis, ast)
         document <- build_document(file_info, occurrences, analysis)
         diagnostics <- collect_diagnostics(file_info, ast, analysis)
         list(document = document, diagnostics = diagnostics, external_refs = analysis$external_refs)
       },
+      ast = ast,
       file_info = file_info,
-      workspace = workspace
+      workspace = workspace,
+      symbol_table = symbol_table
     )
   })
 
-  lapply(tasks, function(task) mirai::collect_mirai(task))
+  results <- lapply(tasks, function(task) mirai::collect_mirai(task))
+  results
 }

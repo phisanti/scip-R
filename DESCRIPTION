@@ -34,6 +34,7 @@ Collate:
     'parser.R'
     'documentation.R'
     'parse-tree-utils.R'
+    'symbol-table.R'
     'symbols-shiny.R'
     'symbols-r6.R'
     'symbols-s4.R'

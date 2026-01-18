@@ -83,7 +83,12 @@ get_children_indexed <- function(node_id, index) {
 #' @return Integer parent ID, or NA if no parent.
 #' @keywords internal
 get_parent_id_indexed <- function(node_id, index) {
-  index$parent[[as.character(node_id)]]
+  key <- as.character(node_id)
+  if (key %in% names(index$parent)) {
+    index$parent[[key]]
+  } else {
+    NA_integer_
+  }
 }
 
 #' Get row index for a node using pre-computed index (O(1)).
@@ -93,7 +98,12 @@ get_parent_id_indexed <- function(node_id, index) {
 #' @return Integer row index in parse_data, or NA if not found.
 #' @keywords internal
 get_row_indexed <- function(node_id, index) {
-  index$rows[[as.character(node_id)]]
+  key <- as.character(node_id)
+  if (key %in% names(index$rows)) {
+    index$rows[[key]]
+  } else {
+    NA_integer_
+  }
 }
 
 #' Check if node has descendant of given type using DFS with early exit.
