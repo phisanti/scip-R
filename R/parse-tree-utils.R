@@ -1,5 +1,7 @@
 #' @include benchmark.R
 #' @include parser.R
+#' @useDynLib scipR, .registration = TRUE
+#' @importFrom Rcpp sourceCpp
 NULL
 
 # This script provides parse tree navigation utilities for AST analysis.
@@ -16,12 +18,16 @@ NULL
 #' Pre-computes parent-child relationships from parse data to enable
 #' fast tree navigation without repeated data frame scans.
 #'
+#' When Rcpp is available, uses C++ implementation for better performance.
+#' Falls back to pure R implementation otherwise.
+#'
 #' @param parse_data Parse data data.frame from getParseData().
 #' @return A list with:
 #'   - children: Named list mapping parent IDs to vectors of child IDs
 #'   - parent: Named vector mapping node IDs to parent IDs
 #'   - rows: Named list mapping node IDs to row indices in parse_data
 #'   - data: Reference to the original parse_data
+#'   - cpp_index: (optional) External pointer to C++ TreeIndex for fast lookups
 #' @keywords internal
 #' @examples
 #' \dontrun{
@@ -38,8 +44,18 @@ build_tree_index <- function(parse_data) {
       parent = integer(0),
       rows = list(),
       by_line = list(),
-      data = parse_data
+      data = parse_data,
+      cpp_index = NULL
     ))
+  }
+
+  # Try to use C++ implementation for the index
+  cpp_index <- NULL
+  if (rcpp_available()) {
+    cpp_index <- tryCatch(
+      build_tree_index_cpp(parse_data$id, parse_data$parent, parse_data$line1),
+      error = function(e) NULL
+    )
   }
 
   # Pre-compute children: parent_id -> vector of child ids
@@ -65,8 +81,18 @@ build_tree_index <- function(parse_data) {
     rows = rows,
     by_line = by_line,
     has_func_on_line = has_func_on_line,
-    data = parse_data
+    data = parse_data,
+    cpp_index = cpp_index
   )
+}
+
+#' Check if Rcpp C++ functions are available
+#'
+#' @return TRUE if Rcpp C++ functions are compiled and loaded, FALSE otherwise
+#' @keywords internal
+rcpp_available <- function() {
+  exists("build_tree_index_cpp", mode = "function") &&
+    is.function(get("build_tree_index_cpp", mode = "function"))
 }
 
 #' Get child IDs using pre-computed index (O(1)).
@@ -114,6 +140,8 @@ get_row_indexed <- function(node_id, index) {
 #' Efficiently checks if any descendant node has one of the specified token types.
 #' Uses depth-first search with early exit - stops as soon as a match is found.
 #'
+#' When C++ is available, uses optimized implementation with early exit.
+#'
 #' @param node_id Numeric ID of the starting node.
 #' @param token_types Character vector of token types to search for.
 #' @param index Tree index from build_tree_index().
@@ -121,6 +149,28 @@ get_row_indexed <- function(node_id, index) {
 #' @keywords internal
 has_descendant_of_type_indexed <- function(node_id, token_types, index) {
   bench_count("has_descendant_check")
+
+  # Use C++ implementation if available
+  if (!is.null(index$cpp_index) && rcpp_available()) {
+    result <- tryCatch(
+      has_descendant_of_type_cpp(node_id, token_types, index$cpp_index, index$data$token),
+      error = function(e) NULL
+    )
+    if (!is.null(result)) return(result)
+  }
+
+  # Fallback to R implementation
+  has_descendant_of_type_indexed_r(node_id, token_types, index)
+}
+
+#' Check if node has descendant of given type (pure R implementation)
+#'
+#' @param node_id Numeric ID of the starting node.
+#' @param token_types Character vector of token types to search for.
+#' @param index Tree index from build_tree_index().
+#' @return Logical indicating if a descendant of the specified type exists.
+#' @keywords internal
+has_descendant_of_type_indexed_r <- function(node_id, token_types, index) {
   stack <- get_children_indexed(node_id, index)
 
   while (length(stack) > 0) {
@@ -145,14 +195,39 @@ has_descendant_of_type_indexed <- function(node_id, token_types, index) {
 
 #' Get all descendant IDs using iterative traversal (O(n)).
 #'
-#' Collects all descendant node IDs without the O(n^2) rbind overhead.
-#' Uses a worklist algorithm with pre-allocated output.
+#' Collects all descendant node IDs. When C++ is available, uses pre-allocated
+#' vectors with O(n) complexity. Falls back to R implementation otherwise.
+#'
+#' The C++ implementation eliminates the O(n^2) vector growth pattern that
+#' occurs with repeated c() calls in the R implementation.
 #'
 #' @param node_id Numeric ID of the starting node.
 #' @param index Tree index from build_tree_index().
 #' @return Integer vector of all descendant node IDs.
 #' @keywords internal
 get_descendant_ids_indexed <- function(node_id, index) {
+  # Use C++ implementation if available and index has cpp_index
+  if (!is.null(index$cpp_index) && rcpp_available()) {
+    return(tryCatch(
+      get_descendant_ids_cpp(node_id, index$cpp_index),
+      error = function(e) get_descendant_ids_indexed_r(node_id, index)
+    ))
+  }
+
+  # Fallback to R implementation
+  get_descendant_ids_indexed_r(node_id, index)
+}
+
+#' Get all descendant IDs (pure R implementation)
+#'
+#' This is the fallback R implementation. Note: This has O(n^2) complexity
+#' due to vector growth with c(). Use the C++ version for large trees.
+#'
+#' @param node_id Numeric ID of the starting node.
+#' @param index Tree index from build_tree_index().
+#' @return Integer vector of all descendant node IDs.
+#' @keywords internal
+get_descendant_ids_indexed_r <- function(node_id, index) {
   result <- integer(0)
   stack <- get_children_indexed(node_id, index)
 

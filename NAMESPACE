@@ -2,5 +2,7 @@
 
 export(index_project)
 export(install_scip_cli)
+importFrom(Rcpp,sourceCpp)
 importFrom(utils,getParseData)
 importFrom(utils,head)
+useDynLib(scipR, .registration = TRUE)

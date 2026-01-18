@@ -306,13 +306,15 @@ extract_top_level_definitions <- function(ast_module) {
 #' then collects all their descendants. Returns a character vector of
 #' node IDs for O(1) membership testing.
 #'
+#' When C++ is available, uses optimized implementation that avoids
+#' the O(n^2) vector growth pattern.
+#'
 #' @param parse_data Parse data data.frame.
 #' @param tree_index Tree index from build_tree_index().
 #' @return Character vector of node IDs inside function bodies.
 #' @keywords internal
 compute_inside_function_ids <- function(parse_data, tree_index) {
   # Find all FUNCTION and OP-LAMBDA nodes
-
   func_tokens <- c("FUNCTION", "OP-LAMBDA")
   func_rows <- parse_data[parse_data$token %in% func_tokens, , drop = FALSE]
 
@@ -320,6 +322,30 @@ compute_inside_function_ids <- function(parse_data, tree_index) {
     return(character(0))
   }
 
+  # Try C++ implementation if available
+  if (!is.null(tree_index$cpp_index) && rcpp_available()) {
+    result <- tryCatch(
+      {
+        ids <- compute_inside_function_ids_cpp(func_rows$id, tree_index$cpp_index)
+        as.character(ids)
+      },
+      error = function(e) NULL
+    )
+    if (!is.null(result)) return(result)
+  }
+
+  # Fallback to R implementation
+  compute_inside_function_ids_r(parse_data, tree_index, func_rows)
+}
+
+#' Pre-compute inside function IDs (pure R implementation)
+#'
+#' @param parse_data Parse data data.frame.
+#' @param tree_index Tree index from build_tree_index().
+#' @param func_rows Pre-filtered rows containing only FUNCTION/OP-LAMBDA tokens.
+#' @return Character vector of node IDs inside function bodies.
+#' @keywords internal
+compute_inside_function_ids_r <- function(parse_data, tree_index, func_rows) {
   # Collect all descendants of function nodes
   # These are the nodes "inside" function bodies
   inside_ids <- character(0)
@@ -331,7 +357,6 @@ compute_inside_function_ids <- function(parse_data, tree_index) {
   }
 
   # Return unique IDs as character for fast %in% lookup
-
   unique(inside_ids)
 }
 
@@ -529,8 +554,10 @@ get_r_version <- function() {
 resolve_symbol_reference <- function(name, symbol_table, current_file, scope_id = NULL, is_definition = FALSE) {
   # For definitions, always use the symbol table's ID if available
   # This ensures the definition and all references use the same ID
-  if (name %in% names(symbol_table$definitions)) {
-    def <- symbol_table$definitions[[name]]
+  # OPTIMIZATION: Use single lookup with NULL check instead of %in% + [[
+  # This avoids two hash lookups (one for %in%, one for [[)
+  def <- symbol_table$definitions[[name]]
+  if (!is.null(def)) {
     return(list(
       symbol_id = def$symbol_id,
       resolved_to = symbol_table$package_name,
