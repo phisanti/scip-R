@@ -245,20 +245,18 @@ parse_gitignore_line <- function(line) {
   )
 }
 
-#' Convert a shell glob to a regular expression body.
+#' Convert a shell glob to a regular expression.
 #'
-#' Uses utils::glob2rx but trims leading/trailing anchors so callers can decide
-#' how to apply the regex (full path vs component).
+#' Uses utils::glob2rx to convert glob patterns to anchored regular expressions.
+#' Anchors are preserved to ensure patterns like `*_` correctly match only
+#' strings ending with underscore, not strings containing underscore anywhere.
 #'
 #' @param pattern Glob pattern without leading slash trimming.
-#' @return Regular expression string (without surrounding delimiters).
+#' @return Regular expression string with anchors preserved.
 #' @keywords internal
 glob_to_regex <- function(pattern) {
   if (!nzchar(pattern)) {
-    return(".*")
+    return("^.*$")
   }
-  rx <- utils::glob2rx(pattern, trim.head = FALSE, trim.tail = FALSE)
-  rx <- sub("^\\^", "", rx, perl = TRUE)
-  rx <- sub("\\$$", "", rx, perl = TRUE)
-  rx
+  utils::glob2rx(pattern, trim.head = FALSE, trim.tail = FALSE)
 }
