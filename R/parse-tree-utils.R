@@ -1,3 +1,4 @@
+#' @include benchmark.R
 #' @include parser.R
 NULL
 
@@ -29,6 +30,8 @@ NULL
 #' children <- get_children_indexed(5, index)
 #' }
 build_tree_index <- function(parse_data) {
+  bench_count("build_tree_index_call")
+
   if (is.null(parse_data) || nrow(parse_data) == 0) {
     return(list(
       children = list(),
@@ -83,7 +86,12 @@ get_children_indexed <- function(node_id, index) {
 #' @return Integer parent ID, or NA if no parent.
 #' @keywords internal
 get_parent_id_indexed <- function(node_id, index) {
-  index$parent[[as.character(node_id)]]
+  key <- as.character(node_id)
+  if (key %in% names(index$parent)) {
+    index$parent[[key]]
+  } else {
+    NA_integer_
+  }
 }
 
 #' Get row index for a node using pre-computed index (O(1)).
@@ -93,7 +101,12 @@ get_parent_id_indexed <- function(node_id, index) {
 #' @return Integer row index in parse_data, or NA if not found.
 #' @keywords internal
 get_row_indexed <- function(node_id, index) {
-  index$rows[[as.character(node_id)]]
+  key <- as.character(node_id)
+  if (key %in% names(index$rows)) {
+    index$rows[[key]]
+  } else {
+    NA_integer_
+  }
 }
 
 #' Check if node has descendant of given type using DFS with early exit.
@@ -107,9 +120,11 @@ get_row_indexed <- function(node_id, index) {
 #' @return Logical indicating if a descendant of the specified type exists.
 #' @keywords internal
 has_descendant_of_type_indexed <- function(node_id, token_types, index) {
+  bench_count("has_descendant_check")
   stack <- get_children_indexed(node_id, index)
 
   while (length(stack) > 0) {
+    bench_count("descendant_dfs_iteration")
     current <- stack[1]
     stack <- stack[-1]
 

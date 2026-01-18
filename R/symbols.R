@@ -1,7 +1,9 @@
 #' @include utils.R
+#' @include benchmark.R
 #' @include parser.R
 #' @include documentation.R
 #' @include parse-tree-utils.R
+#' @include symbol-table.R
 #' @include symbols-qualified.R
 #' @include symbols-s3.R
 #' @include symbols-s4.R
@@ -12,12 +14,18 @@ NULL
 # This script derives symbol definitions and relationships from parsed modules.
 # It maps R constructs into SCIP-compatible descriptors and metadata bundles.
 # Integrated with symbols-qualified.R for package-qualified symbol tracking.
+# Uses symbol-table.R for cross-file reference resolution.
 
 #' Resolve symbols present in an AST module.
+#'
+#' Uses a package-wide symbol table (when provided) to enable cross-file reference
+#' resolution. When a function call references a symbol defined in another file,
+#' the occurrence will point to the same global symbol ID as the definition.
 #'
 #' @param ast_module List produced by `parse_file()` containing expressions and parse data.
 #' @param workspace Workspace context with metadata and dependencies.
 #' @param track_externals Logical; if TRUE, track package-qualified external symbols (default: TRUE).
+#' @param symbol_table Optional symbol table from `build_symbol_table()` for cross-file resolution.
 #' @return A list containing symbol information, occurrence records, and external references.
 #' @keywords internal
 #' @examples
@@ -25,8 +33,11 @@ NULL
 #' ast <- parse_file(list(path = "script.R", relative_path = "script.R"))
 #' resolve_symbols(ast, analyze_workspace(tempdir()))
 #' resolve_symbols(ast, analyze_workspace(tempdir()), track_externals = FALSE)
+#' # With symbol table for cross-file resolution:
+#' symbol_table <- build_symbol_table(parsed_files, workspace)
+#' resolve_symbols(ast, workspace, symbol_table = symbol_table)
 #' }
-resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
+resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbol_table = NULL) {
   data <- ast_module$parse_data
   if (is.null(data) || nrow(data) == 0) {
     return(list(symbols = list(), occurrences = list(), external_refs = list()))
@@ -36,7 +47,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   relative_path <- file_info$relative_path %||% basename(file_info$path)
 
   # Build tree index once for O(1) lookups throughout this function
+  t_idx <- bench_start("build_tree_index", list(row_count = nrow(data)))
   tree_index <- build_tree_index(data)
+  bench_end(t_idx)
 
   assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
   assignment_rows <- data[data$token %in% assignment_tokens, , drop = FALSE]
@@ -48,19 +61,25 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   # Maps symbol_id -> list(node_id = expr_id, line1, col1, line2, col2)
   definition_scopes <- list()
 
+  # Track current function scope for local variable resolution
+  # This helps identify truly local symbols (params, loop vars, nested vars)
+  current_scope_stack <- list()
+
   # FIX 1: Include SYMBOL_FORMALS to detect function parameters
   symbol_rows <- data[data$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL", "SYMBOL_FORMALS"), ]
   symbol_rows <- symbol_rows[order(symbol_rows$line1, symbol_rows$col1), , drop = FALSE]
 
   for (idx in seq_len(nrow(symbol_rows))) {
+    bench_count("symbol_iteration")
     row <- symbol_rows[idx, ]
     name <- row$text
-    symbol_id <- build_symbol_id(name, relative_path, workspace$metadata$namespace)
+    kind <- determine_symbol_kind_indexed(row, data, tree_index)
 
     # Determine if this is a definition
     # SYMBOL_FORMALS are always definitions (function parameters)
     if (row$token == "SYMBOL_FORMALS") {
-      is_definition <- !(symbol_id %in% seen_symbols)
+      is_definition <- TRUE
+      is_local_scope <- TRUE  # Parameters are always local to their function
     } else {
       # FIX 2: Check for loop variables (forcond parent) - use indexed lookup
       parent_id <- get_parent_id_indexed(row$id, tree_index)
@@ -75,12 +94,34 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
       # Check for assignment
       on_assignment_line <- any(assignment_rows$line1 == row$line1 & assignment_rows$col1 > row$col1)
 
-      is_definition <- (is_loop_var || (row$token == "SYMBOL" && on_assignment_line)) &&
-                       !(symbol_id %in% seen_symbols)
+      is_definition <- is_loop_var || (row$token == "SYMBOL" && on_assignment_line)
+
+      # Check if this is inside a function (local scope)
+      is_local_scope <- is_loop_var ||
+        row$token == "SYMBOL_FORMALS" ||
+        is_inside_function(row, data, tree_index)
+    }
+
+    # Resolve the symbol ID using the symbol table or fallback
+    resolved <- resolve_symbol_id(
+      name = name,
+      kind = kind,
+      is_definition = is_definition,
+      is_local_scope = is_local_scope,
+      is_call = (row$token == "SYMBOL_FUNCTION_CALL"),
+      relative_path = relative_path,
+      symbol_table = symbol_table,
+      workspace = workspace
+    )
+
+    symbol_id <- resolved$symbol_id
+
+    # For definitions in this file, check if we've already seen this symbol
+    if (is_definition && symbol_id %in% seen_symbols) {
+      is_definition <- FALSE
     }
 
     role <- if (is_definition) "definition" else "reference"
-    kind <- determine_symbol_kind_indexed(row, data, tree_index)
 
     if (is_definition) {
       symbols[[length(symbols) + 1]] <- list(
@@ -108,10 +149,14 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   }
 
   # Build relationships: for each function definition, find references within its scope
+  t_rel <- bench_start("build_relationships", list(symbol_count = length(symbols), scope_count = length(definition_scopes)))
   symbols <- build_symbol_relationships(symbols, occurrences, definition_scopes)
+  bench_end(t_rel)
 
   # Extract S3 symbols (generics and methods)
+  t_s3 <- bench_start("extract_s3_symbols")
   s3_symbols <- build_s3_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  bench_end(t_s3, list(s3_count = length(s3_symbols)))
   
   if (length(s3_symbols) > 0) {
     # Merge S3 symbols into main symbol list
@@ -130,7 +175,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   }
 
   # Extract R6 class symbols (classes, methods, fields)
+  t_r6 <- bench_start("extract_r6_symbols")
   r6_symbols <- build_r6_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  bench_end(t_r6, list(r6_count = length(r6_symbols)))
   
   if (length(r6_symbols) > 0) {
     for (r6_sym in r6_symbols) {
@@ -139,7 +186,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   }
 
   # Extract S4 class symbols (classes, generics, methods, slots)
+  t_s4 <- bench_start("extract_s4_symbols")
   s4_symbols <- build_s4_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  bench_end(t_s4, list(s4_count = length(s4_symbols)))
   
   if (length(s4_symbols) > 0) {
     for (s4_sym in s4_symbols) {
@@ -148,7 +197,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   }
 
   # Extract Shiny symbols (modules, reactives, observers, outputs)
+  t_shiny <- bench_start("extract_shiny_symbols")
   shiny_symbols <- build_shiny_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  bench_end(t_shiny, list(shiny_count = length(shiny_symbols)))
   
   if (length(shiny_symbols) > 0) {
     for (shiny_sym in shiny_symbols) {
@@ -159,7 +210,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   # Extract package-qualified external symbols (pkg::symbol and pkg:::symbol)
   external_refs <- list()
   if (track_externals) {
+    t_qual <- bench_start("extract_qualified_symbols")
     qualified_symbols <- extract_qualified_symbols(ast_module)
+    bench_end(t_qual, list(qualified_count = length(qualified_symbols)))
     
     # Build external references grouped by package
     for (qual in qualified_symbols) {
@@ -210,7 +263,11 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE) {
   )
 }
 
-#' Build a unique SCIP symbol identifier.
+#' Build a unique SCIP symbol identifier (legacy fallback).
+#'
+#' @description
+#' This function is kept for backwards compatibility but is deprecated.
+#' Use `resolve_symbol_id()` with a symbol table for proper cross-file resolution.
 #'
 #' @param name Symbol name.
 #' @param relative_path Document-relative path.
@@ -223,6 +280,132 @@ build_symbol_id <- function(name, relative_path, namespace = NULL) {
   sanitized_name <- gsub("[^A-Za-z0-9_]", "_", name)
   local_id <- paste0(ns_prefix, sanitized_path, "#", sanitized_name)
   paste("local", local_id)
+}
+
+#' Check if a symbol occurrence is inside a function body.
+#'
+#' Walks up the AST to check if this symbol is nested within a FUNCTION node.
+#' Used to determine if a variable should be local-scoped.
+#'
+#' @param row Parse data row for the symbol.
+#' @param parse_data Full parse data frame.
+#' @param tree_index Tree index from build_tree_index().
+#' @return TRUE if inside a function, FALSE otherwise.
+#' @keywords internal
+is_inside_function <- function(row, parse_data, tree_index) {
+  current_id <- row$id
+
+  while (!is.na(current_id)) {
+    parent_id <- get_parent_id_indexed(current_id, tree_index)
+    if (is.na(parent_id)) {
+      break
+    }
+
+    row_idx <- get_row_indexed(parent_id, tree_index)
+    if (is.na(row_idx)) {
+      break
+    }
+
+    parent_token <- parse_data$token[row_idx]
+
+    if (parent_token == "FUNCTION") {
+      return(TRUE)
+    }
+
+    current_id <- parent_id
+  }
+
+  FALSE
+}
+
+#' Resolve a symbol to its appropriate SCIP symbol ID.
+#'
+#' This is the main resolution function that determines the correct symbol ID
+#' based on the symbol table, symbol type, and context. It handles:
+#' - Package-level definitions (global symbols)
+#' - Cross-file references (resolved via symbol table)
+#' - Base R functions (external references)
+#' - Local variables (file-scoped symbols)
+#'
+#' @param name Symbol name.
+#' @param kind Symbol kind (function, variable, etc.).
+#' @param is_definition Whether this is a definition occurrence.
+#' @param is_local_scope Whether this symbol is in a local scope (inside function).
+#' @param is_call Whether this is a function call.
+#' @param relative_path Current file's relative path.
+#' @param symbol_table Optional symbol table from build_symbol_table().
+#' @param workspace Workspace context.
+#' @return List with symbol_id and resolution info.
+#' @keywords internal
+resolve_symbol_id <- function(name, kind, is_definition, is_local_scope,
+                               is_call, relative_path, symbol_table, workspace) {
+  t_resolve <- bench_start("phase3_resolve_symbol_id")
+
+  # If no symbol table, fall back to legacy behavior
+  if (is.null(symbol_table)) {
+    result <- list(
+      symbol_id = build_symbol_id(name, relative_path, workspace$metadata$namespace),
+      resolved_to = "local"
+    )
+    bench_end(t_resolve, list(resolved_to = "local", lookup_type = "no_table"))
+    bench_count("phase3_lookup_no_table")
+    return(result)
+  }
+
+  # For truly local symbols (params, loop vars, vars inside functions),
+  # use local symbol IDs unless it's a function call that might resolve globally
+  if (is_local_scope && is_definition && kind != "function") {
+    result <- list(
+      symbol_id = build_local_symbol_id(name, relative_path),
+      resolved_to = "local"
+    )
+    bench_end(t_resolve, list(resolved_to = "local", lookup_type = "local_scope"))
+    bench_count("phase3_lookup_local_scope")
+    return(result)
+  }
+
+  # Check symbol table for package-level definitions
+  t_lookup <- bench_start("phase3_symbol_table_lookup", list(name = name))
+  found_in_table <- name %in% names(symbol_table$definitions)
+  bench_end(t_lookup, list(found = found_in_table))
+
+  if (found_in_table) {
+    def <- symbol_table$definitions[[name]]
+    result <- list(
+      symbol_id = def$symbol_id,
+      resolved_to = symbol_table$package_name,
+      is_exported = def$exported,
+      defined_in = def$file
+    )
+    bench_end(t_resolve, list(resolved_to = symbol_table$package_name, lookup_type = "table_hit"))
+    bench_count("phase3_lookup_table_hit")
+    return(result)
+  }
+
+  bench_count("phase3_lookup_table_miss")
+
+  # For function calls, check if it's a base R function
+  if (is_call && is_base_r_function(name)) {
+    result <- list(
+      symbol_id = build_external_symbol_id(name, "base", get_r_version(), "function"),
+      resolved_to = "base"
+    )
+    bench_end(t_resolve, list(resolved_to = "base", lookup_type = "base_r"))
+    bench_count("phase3_lookup_base_r")
+    return(result)
+  }
+
+  # Unresolved - use local symbol ID (file-scoped)
+  # This handles:
+  # - Variables that aren't in the symbol table
+  # - Functions from attached packages (library() calls) that we can't resolve
+  result <- list(
+    symbol_id = build_local_symbol_id(name, relative_path),
+    resolved_to = "local"
+  )
+  bench_end(t_resolve, list(resolved_to = "local", lookup_type = "unresolved"))
+  bench_count("phase3_lookup_unresolved")
+  result
 }
 
 #' Check if symbol is defined as a function.
