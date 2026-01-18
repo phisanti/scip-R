@@ -26,6 +26,7 @@ NULL
 #' @param workspace Workspace context with metadata and dependencies.
 #' @param track_externals Logical; if TRUE, track package-qualified external symbols (default: TRUE).
 #' @param symbol_table Optional symbol table from `build_symbol_table()` for cross-file resolution.
+#' @param tree_index Optional tree index from `build_tree_index()` for O(1) lookups.
 #' @return A list containing symbol information, occurrence records, and external references.
 #' @keywords internal
 #' @examples

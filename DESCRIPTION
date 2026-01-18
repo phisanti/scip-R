@@ -10,13 +10,12 @@ Author: Santiago Cano-Muniz [aut, cre]
 Maintainer: Santiago Cano-Muniz <tisalon@proton.me>
 Description: Generates SCIP indexes for R codebases so developer tools can serve
     symbol-aware code search and navigation. Still under active development.
-License: MIT
+License: MIT + file LICENSE
 Encoding: UTF-8
 Depends: R (>= 3.6)
 LinkingTo: Rcpp
 Imports:
     cli,
-    optparse,
     Rcpp,
     RProtoBuf,
     Rapp,

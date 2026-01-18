@@ -3,9 +3,11 @@
 // replacing the O(n^2) R implementations that used vector growth patterns.
 
 #include <Rcpp.h>
-#include <unordered_map>
-#include <vector>
+#include <algorithm>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 using namespace Rcpp;
 

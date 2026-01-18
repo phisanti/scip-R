@@ -262,6 +262,7 @@ process_single_file <- function(file_info, workspace) {
 #' @param ast Pre-parsed AST module from parse_file().
 #' @param workspace Workspace metadata list.
 #' @param symbol_table Symbol table from build_symbol_table().
+#' @param tree_index Optional tree index from build_tree_index() for O(1) lookups.
 #' @return List with components:
 #'   \describe{
 #'     \item{document}{SCIP Document message}
