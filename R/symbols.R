@@ -97,9 +97,10 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
       is_definition <- is_loop_var || (row$token == "SYMBOL" && on_assignment_line)
 
       # Check if this is inside a function (local scope)
+      # OPTIMIZATION: Use O(1) pre-computed lookup instead of O(depth) tree walk
       is_local_scope <- is_loop_var ||
         row$token == "SYMBOL_FORMALS" ||
-        is_inside_function(row, data, tree_index)
+        is_inside_function_indexed(row$id, tree_index)
     }
 
     # Resolve the symbol ID using the symbol table or fallback

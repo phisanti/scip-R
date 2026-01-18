@@ -302,18 +302,37 @@ extract_top_level_definitions <- function(ast_module) {
 
 #' Pre-compute all node IDs that are inside function bodies.
 #'
-#' Does a single O(n) traversal to find all FUNCTION/OP-LAMBDA nodes,
-#' then collects all their descendants. Returns a character vector of
-#' node IDs for O(1) membership testing.
-#'
-#' When C++ is available, uses optimized implementation that avoids
-#' the O(n^2) vector growth pattern.
+#' OPTIMIZATION: Now uses the pre-computed inside_function vector from
+#' build_tree_index() for O(n) extraction instead of O(n * nesting_depth)
+#' descendant collection.
 #'
 #' @param parse_data Parse data data.frame.
 #' @param tree_index Tree index from build_tree_index().
 #' @return Character vector of node IDs inside function bodies.
 #' @keywords internal
 compute_inside_function_ids <- function(parse_data, tree_index) {
+  # OPTIMIZATION: Use pre-computed inside_function vector if available
+  # This is O(n) instead of O(n * nesting_depth)
+  if (!is.null(tree_index$inside_function) && length(tree_index$inside_function) > 0) {
+    inside_mask <- tree_index$inside_function
+    return(as.character(parse_data$id[inside_mask]))
+  }
+
+  # Fallback to legacy implementation for backward compatibility
+  compute_inside_function_ids_legacy(parse_data, tree_index)
+}
+
+#' Legacy implementation of inside function ID computation.
+#'
+#' Collects descendants for each function node. This has O(n * nesting_depth)
+#' complexity for nested functions. Kept for backward compatibility when
+#' tree_index doesn't have pre-computed inside_function.
+#'
+#' @param parse_data Parse data data.frame.
+#' @param tree_index Tree index from build_tree_index().
+#' @return Character vector of node IDs inside function bodies.
+#' @keywords internal
+compute_inside_function_ids_legacy <- function(parse_data, tree_index) {
   # Find all FUNCTION and OP-LAMBDA nodes
   func_tokens <- c("FUNCTION", "OP-LAMBDA")
   func_rows <- parse_data[parse_data$token %in% func_tokens, , drop = FALSE]
@@ -334,29 +353,12 @@ compute_inside_function_ids <- function(parse_data, tree_index) {
     if (!is.null(result)) return(result)
   }
 
-  # Fallback to R implementation
-  compute_inside_function_ids_r(parse_data, tree_index, func_rows)
-}
-
-#' Pre-compute inside function IDs (pure R implementation)
-#'
-#' @param parse_data Parse data data.frame.
-#' @param tree_index Tree index from build_tree_index().
-#' @param func_rows Pre-filtered rows containing only FUNCTION/OP-LAMBDA tokens.
-#' @return Character vector of node IDs inside function bodies.
-#' @keywords internal
-compute_inside_function_ids_r <- function(parse_data, tree_index, func_rows) {
-  # Collect all descendants of function nodes
-  # These are the nodes "inside" function bodies
+  # R fallback: collect all descendants of function nodes
   inside_ids <- character(0)
-
   for (func_id in func_rows$id) {
-    # Get all descendants of this function node
     desc_ids <- get_descendant_ids_indexed(func_id, tree_index)
     inside_ids <- c(inside_ids, as.character(desc_ids))
   }
-
-  # Return unique IDs as character for fast %in% lookup
   unique(inside_ids)
 }
 

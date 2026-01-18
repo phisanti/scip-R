@@ -326,3 +326,76 @@ int tree_index_size(SEXP index_ptr) {
   TreeIndexPtr idx(index_ptr);
   return idx->n;
 }
+
+//' Build scope index using position-based containment (C++ implementation)
+//'
+//' For each node, determines the innermost enclosing function based on
+//' source position containment. Processes functions from largest to smallest
+//' so smaller (inner) functions overwrite larger (outer) ones.
+//'
+//' @param id Integer vector of all node IDs
+//' @param line1 Integer vector of start lines
+//' @param col1 Integer vector of start columns
+//' @param line2 Integer vector of end lines
+//' @param col2 Integer vector of end columns
+//' @param func_ids Integer vector of function node IDs
+//' @param func_line1 Integer vector of function start lines
+//' @param func_col1 Integer vector of function start columns
+//' @param func_line2 Integer vector of function end lines
+//' @param func_col2 Integer vector of function end columns
+//' @return Integer vector of enclosing function IDs (NA for top-level nodes)
+//' @keywords internal
+// [[Rcpp::export]]
+IntegerVector build_scope_index_cpp(
+    IntegerVector id,
+    IntegerVector line1, IntegerVector col1,
+    IntegerVector line2, IntegerVector col2,
+    IntegerVector func_ids,
+    IntegerVector func_line1, IntegerVector func_col1,
+    IntegerVector func_line2, IntegerVector func_col2
+) {
+  int n = id.size();
+  int nf = func_ids.size();
+
+  // Initialize all nodes as having no enclosing function
+  IntegerVector enclosing(n, NA_INTEGER);
+
+  if (nf == 0) {
+    return enclosing;
+  }
+
+  // Sort functions by size descending (largest/outermost first)
+  // Size approximation: (line_span * 10000) + col_span
+  std::vector<std::pair<int, int>> func_order(nf);
+  for (int i = 0; i < nf; i++) {
+    int size = (func_line2[i] - func_line1[i]) * 10000 +
+               (func_col2[i] - func_col1[i]);
+    func_order[i] = {-size, i};  // Negative for descending sort
+  }
+  std::sort(func_order.begin(), func_order.end());
+
+  // Process from largest to smallest
+  // Later (smaller) functions overwrite, giving innermost scope
+  for (const auto& fo : func_order) {
+    int fi = fo.second;
+    int fid = func_ids[fi];
+    int fl1 = func_line1[fi], fc1 = func_col1[fi];
+    int fl2 = func_line2[fi], fc2 = func_col2[fi];
+
+    // Check each node for containment within this function
+    for (int i = 0; i < n; i++) {
+      // Node start must be >= function start
+      bool start_ok = (line1[i] > fl1) ||
+                      (line1[i] == fl1 && col1[i] >= fc1);
+      // Node end must be <= function end
+      bool end_ok = (line2[i] < fl2) ||
+                    (line2[i] == fl2 && col2[i] <= fc2);
+
+      if (start_ok && end_ok) {
+        enclosing[i] = fid;  // Overwrite with current (smaller) function
+      }
+    }
+  }
+
+  return enclosing;
+}

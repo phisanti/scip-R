@@ -107,3 +107,25 @@ tree_index_size <- function(index_ptr) {
     .Call(`_scipR_tree_index_size`, index_ptr)
 }
 
+#' Build scope index using position-based containment (C++ implementation)
+#'
+#' For each node, determines the innermost enclosing function based on
+#' source position containment. Processes functions from largest to smallest
+#' so smaller (inner) functions overwrite larger (outer) ones.
+#'
+#' @param id Integer vector of all node IDs
+#' @param line1 Integer vector of start lines
+#' @param col1 Integer vector of start columns
+#' @param line2 Integer vector of end lines
+#' @param col2 Integer vector of end columns
+#' @param func_ids Integer vector of function node IDs
+#' @param func_line1 Integer vector of function start lines
+#' @param func_col1 Integer vector of function start columns
+#' @param func_line2 Integer vector of function end lines
+#' @param func_col2 Integer vector of function end columns
+#' @return Integer vector of enclosing function IDs (NA for top-level nodes)
+#' @keywords internal
+build_scope_index_cpp <- function(id, line1, col1, line2, col2, func_ids, func_line1, func_col1, func_line2, func_col2) {
+    .Call(`_scipR_build_scope_index_cpp`, id, line1, col1, line2, col2, func_ids, func_line1, func_col1, func_line2, func_col2)
+}
+

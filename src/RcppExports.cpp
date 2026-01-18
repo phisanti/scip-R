@@ -119,6 +119,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// build_scope_index_cpp
+IntegerVector build_scope_index_cpp(IntegerVector id, IntegerVector line1, IntegerVector col1, IntegerVector line2, IntegerVector col2, IntegerVector func_ids, IntegerVector func_line1, IntegerVector func_col1, IntegerVector func_line2, IntegerVector func_col2);
+RcppExport SEXP _scipR_build_scope_index_cpp(SEXP idSEXP, SEXP line1SEXP, SEXP col1SEXP, SEXP line2SEXP, SEXP col2SEXP, SEXP func_idsSEXP, SEXP func_line1SEXP, SEXP func_col1SEXP, SEXP func_line2SEXP, SEXP func_col2SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type id(idSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type line1(line1SEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type col1(col1SEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type line2(line2SEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type col2(col2SEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type func_ids(func_idsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type func_line1(func_line1SEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type func_col1(func_col1SEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type func_line2(func_line2SEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type func_col2(func_col2SEXP);
+    rcpp_result_gen = Rcpp::wrap(build_scope_index_cpp(id, line1, col1, line2, col2, func_ids, func_line1, func_col1, func_line2, func_col2));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_scipR_build_tree_index_cpp", (DL_FUNC) &_scipR_build_tree_index_cpp, 3},
@@ -130,6 +150,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_scipR_compute_inside_function_ids_cpp", (DL_FUNC) &_scipR_compute_inside_function_ids_cpp, 2},
     {"_scipR_is_tree_index_ptr", (DL_FUNC) &_scipR_is_tree_index_ptr, 1},
     {"_scipR_tree_index_size", (DL_FUNC) &_scipR_tree_index_size, 1},
+    {"_scipR_build_scope_index_cpp", (DL_FUNC) &_scipR_build_scope_index_cpp, 10},
     {NULL, NULL, 0}
 };
 
