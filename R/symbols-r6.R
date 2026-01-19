@@ -238,15 +238,15 @@ extract_inherit_r6 <- function(descendants, data) {
   NULL
 }
 
-#' Extract member names from public/private/active lists.
+#' Extract member info from public/private/active lists.
 #'
 #' Parses 'public = list(...)', 'private = list(...)', or 'active = list(...)'
-#' to extract member names.
+#' to extract member names and whether each is a method or field.
 #'
 #' @param descendants Parse data subset of R6Class call.
 #' @param data Full parse data for context.
 #' @param member_type Character: "public", "private", or "active".
-#' @return Character vector of member names or NULL.
+#' @return List of member info (name, is_method) or NULL.
 #' @keywords internal
 extract_members_r6 <- function(descendants, data, member_type) {
   # Look for EQ_SUB token followed by member_type SYMBOL
@@ -288,9 +288,8 @@ extract_members_r6 <- function(descendants, data, member_type) {
         expr_right <- expr_right[order(expr_right$line1, expr_right$col1), , drop = FALSE]
         list_descendants <- get_descendants(expr_right$id[1], data)
 
-        # Extract SYMBOL names from the list (member names)
-        # These appear before = or as standalone elements
-        member_names <- character()
+        # Extract member info from the list (name + is_method)
+        members <- list()
 
         # Look for named list elements (name = value)
         eq_assign_rows <- list_descendants[list_descendants$token == "EQ_SUB", , drop = FALSE]
@@ -299,8 +298,10 @@ extract_members_r6 <- function(descendants, data, member_type) {
           eq_assign_row <- eq_assign_rows[j, ]
           eq_assign_parent <- eq_assign_row$parent
 
-          # Get left-hand side symbol
+          # Get siblings of this assignment
           eq_assign_siblings <- data[data$parent == eq_assign_parent, , drop = FALSE]
+
+          # Get left-hand side symbol (member name)
           lhs_mask <- eq_assign_siblings$token %in% c("SYMBOL", "SYMBOL_SUB")
           lhs_before <- eq_assign_siblings$line1 < eq_assign_row$line1 |
             (eq_assign_siblings$line1 == eq_assign_row$line1 &
@@ -309,12 +310,39 @@ extract_members_r6 <- function(descendants, data, member_type) {
 
           if (nrow(symbol_lhs) > 0) {
             symbol_lhs <- symbol_lhs[order(symbol_lhs$line1, symbol_lhs$col1), , drop = FALSE]
-            member_names <- c(member_names, symbol_lhs$text[nrow(symbol_lhs)])
+            member_name <- symbol_lhs$text[nrow(symbol_lhs)]
+
+            # Check if RHS contains a FUNCTION token (method vs field)
+            rhs_after <- eq_assign_siblings$line1 > eq_assign_row$line1 |
+              (eq_assign_siblings$line1 == eq_assign_row$line1 &
+                 eq_assign_siblings$col1 > eq_assign_row$col1)
+            rhs_expr <- eq_assign_siblings[eq_assign_siblings$token == "expr" & rhs_after, , drop = FALSE]
+
+            is_method <- FALSE
+            if (nrow(rhs_expr) > 0) {
+              rhs_expr <- rhs_expr[order(rhs_expr$line1, rhs_expr$col1), , drop = FALSE]
+              rhs_descendants <- get_descendants(rhs_expr$id[1], data)
+              is_method <- any(rhs_descendants$token == "FUNCTION")
+            }
+
+            members[[length(members) + 1]] <- list(
+              name = member_name,
+              is_method = is_method
+            )
           }
         }
 
-        if (length(member_names) > 0) {
-          return(unique(member_names))
+        if (length(members) > 0) {
+          # Remove duplicates by name, keeping first occurrence
+          seen <- character()
+          unique_members <- list()
+          for (m in members) {
+            if (!(m$name %in% seen)) {
+              seen <- c(seen, m$name)
+              unique_members[[length(unique_members) + 1]] <- m
+            }
+          }
+          return(unique_members)
         }
       }
     }
@@ -360,45 +388,53 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
       documentation = NULL
     )
     
-    # Process public members
+    # Process public members (list of {name, is_method} info)
     if (!is.null(class_info$public_members) && length(class_info$public_members) > 0) {
-      for (member_name in class_info$public_members) {
-        # Determine if it's a method or field based on naming
+      for (member_info in class_info$public_members) {
+        member_name <- member_info$name
+        is_method <- member_info$is_method
+
+        # Determine kind and suffix based on is_method flag
         if (member_name == "initialize") {
           kind <- "r6_constructor"
           suffix <- "()."
-        } else {
-          # Default to method (most common case)
+        } else if (is_method) {
           kind <- "r6_method"
           suffix <- "()."
-        }
-        
-        member_symbol <- paste0(class_symbol, "#", member_name, suffix)
-        
-        symbols[[length(symbols) + 1]] <- list(
-          symbol = member_symbol,
-          display_name = member_name,
-          kind = kind,
-          documentation = NULL,
-          enclosing_symbol = class_symbol
-        )
-      }
-    }
-    
-    # Process private members
-    if (!is.null(class_info$private_members) && length(class_info$private_members) > 0) {
-      for (member_name in class_info$private_members) {
-        # Private members that start with . are typically fields
-        if (startsWith(member_name, ".")) {
+        } else {
           kind <- "r6_field"
           suffix <- "."
-        } else {
+        }
+
+        member_symbol <- paste0(class_symbol, "#", member_name, suffix)
+
+        symbols[[length(symbols) + 1]] <- list(
+          symbol = member_symbol,
+          display_name = member_name,
+          kind = kind,
+          documentation = NULL,
+          enclosing_symbol = class_symbol
+        )
+      }
+    }
+
+    # Process private members (list of {name, is_method} info)
+    if (!is.null(class_info$private_members) && length(class_info$private_members) > 0) {
+      for (member_info in class_info$private_members) {
+        member_name <- member_info$name
+        is_method <- member_info$is_method
+
+        # Use is_method flag to determine kind
+        if (is_method) {
           kind <- "r6_method"
           suffix <- "()."
+        } else {
+          kind <- "r6_field"
+          suffix <- "."
         }
-        
+
         member_symbol <- paste0(class_symbol, "#", member_name, suffix)
-        
+
         symbols[[length(symbols) + 1]] <- list(
           symbol = member_symbol,
           display_name = member_name,
@@ -409,11 +445,12 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
       }
     }
     
-    # Process active bindings (treat as properties)
+    # Process active bindings (list of {name, is_method} info, treat as properties)
     if (!is.null(class_info$active_members) && length(class_info$active_members) > 0) {
-      for (member_name in class_info$active_members) {
+      for (member_info in class_info$active_members) {
+        member_name <- member_info$name
         member_symbol <- paste0(class_symbol, "#", member_name, ".")
-        
+
         symbols[[length(symbols) + 1]] <- list(
           symbol = member_symbol,
           display_name = member_name,
