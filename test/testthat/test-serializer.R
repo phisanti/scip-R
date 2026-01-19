@@ -13,7 +13,6 @@ testthat::test_that("serializer writes RDS artifact", {
 })
 
 
-# TODO: The project_root MUST BE SIMPLIFIED
 test_that("scip proto is loadable from install or fallback path", {
   project_root <- normalizePath(
     file.path(testthat::test_path("."), "..", ".."),

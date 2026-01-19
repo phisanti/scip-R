@@ -121,37 +121,6 @@ extract_qualified_symbols <- function(ast_module) {
   qualified_symbols
 }
 
-#' Build SCIP symbol descriptor for a qualified symbol.
-#'
-#' Converts a package-qualified symbol into SCIP format with metadata.
-#'
-#' @param qualified_info List from extract_qualified_symbols with package, accessor, token.
-#' @param workspace Workspace context with dependency versions.
-#' @return List with SCIP symbol descriptor and metadata.
-#' @keywords internal
-qualified_to_scip <- function(qualified_info, workspace) {
-  package_name <- qualified_info$package
-  symbol_name <- qualified_info$token
-  accessor <- qualified_info$accessor
-  
-  # Get package version from workspace dependencies
-  version <- workspace$dependencies[[package_name]] %||% "0.0.0"
-  
-  # Build SCIP symbol descriptor
-  # Format: scip-r <package> <version> <symbol>().
-  scip_symbol <- sprintf("scip-r %s %s %s().", package_name, version, symbol_name)
-  
-  list(
-    symbol = scip_symbol,
-    range = qualified_info$range,
-    metadata = list(
-      accessor = accessor,
-      qualified_source = TRUE,
-      is_internal = (accessor == ":::")
-    )
-  )
-}
-
 #' Collect external symbols from parsed files and workspace dependencies.
 #'
 #' Creates placeholder external symbol entries for each package listed in

@@ -27,24 +27,3 @@ parse_file <- function(file_info) {
   )
 }
 
-#' Build a simplified parse tree from parse data.
-#'
-#' @param parse_data Data frame returned by `getParseData()`.
-#' @return Nested list representing the AST in a lightweight form.
-#' @keywords internal
-build_ast <- function(parse_data) {
-  if (is.null(parse_data)) {
-    return(list())
-  }
-  nodes <- split(parse_data, parse_data$id)
-  lapply(nodes, function(node) {
-    list(
-      token = node$text,
-      type = node$token[[1]],
-      line1 = node$line1[[1]],
-      col1 = node$col1[[1]],
-      line2 = node$line2[[1]],
-      col2 = node$col2[[1]]
-    )
-  })
-}
