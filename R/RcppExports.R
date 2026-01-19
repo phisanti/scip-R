@@ -129,3 +129,22 @@ build_scope_index_cpp <- function(id, line1, col1, line2, col2, func_ids, func_l
     .Call(`_scipR_build_scope_index_cpp`, id, line1, col1, line2, col2, func_ids, func_line1, func_col1, func_line2, func_col2)
 }
 
+#' Resolve symbols in parse data (C++ implementation)
+#'
+#' This is the main optimization target - moves the entire symbol resolution
+#' loop from R to C++ for 50-100x speedup on the hot path.
+#'
+#' @param parse_data DataFrame with id, parent, token, text, line1, col1, line2, col2
+#' @param tree_index_ptr External pointer to TreeIndex
+#' @param inside_function LogicalVector indicating if each row is inside a function
+#' @param definitions_env R environment mapping name -> {symbol_id, ...}
+#' @param base_r_funcs CharacterVector of base R function names
+#' @param relative_path File path for local symbol IDs
+#' @param package_name Package name for symbol IDs
+#' @param r_version R version for base R symbol IDs
+#' @return List with symbols (DataFrame) and occurrences (DataFrame)
+#' @keywords internal
+resolve_symbols_cpp <- function(parse_data, tree_index_ptr, inside_function, definitions_env, base_r_funcs, relative_path, package_name, r_version) {
+    .Call(`_scipR_resolve_symbols_cpp`, parse_data, tree_index_ptr, inside_function, definitions_env, base_r_funcs, relative_path, package_name, r_version)
+}
+

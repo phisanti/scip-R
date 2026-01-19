@@ -139,6 +139,24 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// resolve_symbols_cpp
+List resolve_symbols_cpp(DataFrame parse_data, SEXP tree_index_ptr, LogicalVector inside_function, Environment definitions_env, CharacterVector base_r_funcs, std::string relative_path, std::string package_name, std::string r_version);
+RcppExport SEXP _scipR_resolve_symbols_cpp(SEXP parse_dataSEXP, SEXP tree_index_ptrSEXP, SEXP inside_functionSEXP, SEXP definitions_envSEXP, SEXP base_r_funcsSEXP, SEXP relative_pathSEXP, SEXP package_nameSEXP, SEXP r_versionSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< DataFrame >::type parse_data(parse_dataSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type tree_index_ptr(tree_index_ptrSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type inside_function(inside_functionSEXP);
+    Rcpp::traits::input_parameter< Environment >::type definitions_env(definitions_envSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type base_r_funcs(base_r_funcsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type relative_path(relative_pathSEXP);
+    Rcpp::traits::input_parameter< std::string >::type package_name(package_nameSEXP);
+    Rcpp::traits::input_parameter< std::string >::type r_version(r_versionSEXP);
+    rcpp_result_gen = Rcpp::wrap(resolve_symbols_cpp(parse_data, tree_index_ptr, inside_function, definitions_env, base_r_funcs, relative_path, package_name, r_version));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_scipR_build_tree_index_cpp", (DL_FUNC) &_scipR_build_tree_index_cpp, 3},
@@ -151,6 +169,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_scipR_is_tree_index_ptr", (DL_FUNC) &_scipR_is_tree_index_ptr, 1},
     {"_scipR_tree_index_size", (DL_FUNC) &_scipR_tree_index_size, 1},
     {"_scipR_build_scope_index_cpp", (DL_FUNC) &_scipR_build_scope_index_cpp, 10},
+    {"_scipR_resolve_symbols_cpp", (DL_FUNC) &_scipR_resolve_symbols_cpp, 8},
     {NULL, NULL, 0}
 };
 
