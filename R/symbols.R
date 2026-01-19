@@ -162,26 +162,10 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
     symbols <- df_to_symbol_list(cpp_result$symbols)
     occurrences <- df_to_occurrence_list(cpp_result$occurrences)
 
-    # Track definition scopes for function definitions (for relationship building)
-    definition_scopes <- list()
-    for (sym in symbols) {
-      if (sym$kind == "function") {
-        # Find the function definition row to get its scope
-        func_rows <- data[data$text == sym$display_name &
-                          data$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL"), , drop = FALSE]
-        if (nrow(func_rows) > 0) {
-          scope_info <- get_function_scope(func_rows[1, ], data, tree_index)
-          if (!is.null(scope_info)) {
-            definition_scopes[[sym$symbol]] <- scope_info
-          }
-        }
-      }
-    }
-
-    # Build relationships
-    t_rel <- bench_start("build_relationships", list(symbol_count = length(symbols), scope_count = length(definition_scopes)))
-    symbols <- build_symbol_relationships(symbols, occurrences, definition_scopes)
-    bench_end(t_rel)
+    # NOTE: We no longer build IsReference relationships here.
+    # Standard SCIP pattern stores references as Occurrences with SymbolRoles=8,
+    # not as SymbolInformation.Relationships. Relationships are reserved for
+    # IsImplementation (class inheritance) and IsTypeDefinition only.
 
   } else {
     # ============================================================================
@@ -214,9 +198,6 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
     occurrences <- list()
     # OPTIMIZATION: Use environment for O(1) seen symbol check instead of %in%
     seen_symbols_env <- new.env(hash = TRUE, parent = emptyenv())
-
-    # Track definition scopes for relationship building
-    definition_scopes <- list()
 
     # LAZY LOCAL SYMBOL CREATION: Create local symbols on-demand
     # Maps position_key -> symbol_id for deduplication
@@ -297,13 +278,6 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         )
         seen_symbols_env[[symbol_id]] <- TRUE
 
-        # Track scope for function definitions to build relationships later
-        if (kind == "function") {
-          scope_info <- get_function_scope(row, data, tree_index)
-          if (!is.null(scope_info)) {
-            definition_scopes[[symbol_id]] <- scope_info
-          }
-        }
       }
 
       occurrences[[length(occurrences) + 1]] <- list(
@@ -313,10 +287,10 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
       )
     }
 
-    # Build relationships: for each function definition, find references within its scope
-    t_rel <- bench_start("build_relationships", list(symbol_count = length(symbols), scope_count = length(definition_scopes)))
-    symbols <- build_symbol_relationships(symbols, occurrences, definition_scopes)
-    bench_end(t_rel)
+    # NOTE: We no longer build IsReference relationships here.
+    # Standard SCIP pattern stores references as Occurrences with SymbolRoles=8,
+    # not as SymbolInformation.Relationships. Relationships are reserved for
+    # IsImplementation (class inheritance) and IsTypeDefinition only.
   }
 
   # Extract S3 symbols (generics and methods)
@@ -610,110 +584,12 @@ merge_external_refs <- function(refs1, refs2) {
   result
 }
 
-#' Get the scope (range) of a function definition.
-#'
-#' Given a symbol row that defines a function, finds the expression containing
-#' the entire function definition (including the body) and returns its range.
-#'
-#' @param row Parse-data row for the symbol being defined.
-#' @param parse_data Full parse-data frame.
-#' @param index Tree index from build_tree_index().
-#' @return List with line1, col1, line2, col2 of the function scope, or NULL if not found.
-#' @keywords internal
-get_function_scope <- function(row, parse_data, index) {
-  # Find the assignment expression containing this symbol
-  # The function body will be a descendant of this expression
-  assignment_row <- find_on_same_line_indexed(row$id, index, c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN"), "after")
-
-  if (nrow(assignment_row) == 0) {
-    return(NULL)
-  }
-
-  # Get the parent expression that contains the entire assignment
-  expr_row <- find_ancestor_of_type_indexed(assignment_row$id[1], "expr", index)
-
-  if (nrow(expr_row) == 0) {
-    return(NULL)
-  }
-
-  list(
-    node_id = expr_row$id[1],
-    line1 = expr_row$line1[1],
-    col1 = expr_row$col1[1],
-    line2 = expr_row$line2[1],
-    col2 = expr_row$col2[1]
-  )
-}
-
-#' Build relationships for symbols based on their scopes.
-#'
-#' For each symbol with a defined scope (e.g., function definitions), finds all
-#' reference occurrences within that scope and adds them as relationships.
-#'
-#' @param symbols List of symbol entries from resolve_symbols().
-#' @param occurrences List of occurrence entries from resolve_symbols().
-#' @param definition_scopes Named list mapping symbol_id to scope info.
-#' @return Updated symbols list with relationships field populated.
-#' @keywords internal
-build_symbol_relationships <- function(symbols, occurrences, definition_scopes) {
-  if (length(definition_scopes) == 0 || length(occurrences) == 0) {
-    return(symbols)
-  }
-
-  # For efficiency, build a lookup from symbol_id to symbol index
-  symbol_idx_map <- stats::setNames(
-    seq_along(symbols),
-    vapply(symbols, function(s) s$symbol, character(1))
-  )
-
-  # Filter to reference occurrences only
-  ref_occurrences <- Filter(function(occ) identical(occ$role, "reference"), occurrences)
-
-  # For each definition with a scope, find references within that scope
-  for (def_symbol_id in names(definition_scopes)) {
-    scope <- definition_scopes[[def_symbol_id]]
-    sym_idx <- symbol_idx_map[[def_symbol_id]]
-
-    if (is.null(sym_idx)) next
-
-    # Find references that fall within this scope
-    # A reference is in scope if its range is contained within the scope range
-    refs_in_scope <- list()
-    seen_ref_symbols <- character()
-
-    for (ref_occ in ref_occurrences) {
-      ref_range <- ref_occ$range
-      ref_line <- ref_range[1]
-      ref_col <- ref_range[2]
-
-      # Check if reference is within scope (simple range containment)
-      in_scope <- (
-        (ref_line > scope$line1 || (ref_line == scope$line1 && ref_col >= scope$col1)) &&
-        (ref_line < scope$line2 || (ref_line == scope$line2 && ref_col <= scope$col2))
-      )
-
-      if (in_scope) {
-        ref_symbol <- ref_occ$symbol
-
-        # Skip self-references and duplicates
-        if (ref_symbol != def_symbol_id && !ref_symbol %in% seen_ref_symbols) {
-          refs_in_scope[[length(refs_in_scope) + 1]] <- list(
-            symbol = ref_symbol,
-            is_reference = TRUE
-          )
-          seen_ref_symbols <- c(seen_ref_symbols, ref_symbol)
-        }
-      }
-    }
-
-    # Add relationships to the symbol entry
-    if (length(refs_in_scope) > 0) {
-      symbols[[sym_idx]]$relationships <- refs_in_scope
-    }
-  }
-
-  symbols
-}
+# NOTE: get_function_scope() and build_symbol_relationships() were removed.
+# These functions created IsReference relationships which is non-standard.
+# Standard SCIP pattern stores references as Occurrences with SymbolRoles=8,
+# not as SymbolInformation.Relationships. Relationships are reserved for
+# IsImplementation (class inheritance) and IsTypeDefinition only.
+# See: .active_plans/align_scip-R_to_standard.md
 
 # ============================================================================
 # C++ RESULT CONVERTERS
