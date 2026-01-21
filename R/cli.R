@@ -26,13 +26,13 @@ NULL
 
 #' Install or update the scip-r CLI executable
 #'
-#' Normally, the `scip-r` command is installed automatically when the 
-#' scipR package is installed. Use this function if you need to 
+#' Normally, the `scip-r` command is installed automatically when the
+#' scipR package is installed. Use this function if you need to
 #' reinstall the CLI tool or install it to a custom location.
 #'
-#' @param destdir Destination directory for the CLI launcher. 
-#'                If `NULL`, uses Rapp's default behavior (respects 
-#'                `RAPP_INSTALL_DIR` environment variable and standard 
+#' @param destdir Destination directory for the CLI launcher.
+#'                If `NULL`, uses Rapp's default behavior (respects
+#'                `RAPP_INSTALL_DIR` environment variable and standard
 #'                XDG paths like `~/.local/bin`).
 #'
 #' @return Invisibly returns `TRUE` on success.
@@ -41,7 +41,7 @@ NULL
 #' \dontrun{
 #' # Install to default location (usually ~/.local/bin on Unix)
 #' install_scip_cli()
-#' 
+#'
 #' # Install to custom location
 #' install_scip_cli(destdir = "~/my/custom/bin")
 #' }

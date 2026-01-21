@@ -10,12 +10,13 @@ Author: Santiago Cano-Muniz [aut, cre]
 Maintainer: Santiago Cano-Muniz <tisalon@proton.me>
 Description: Generates SCIP indexes for R codebases so developer tools can serve
     symbol-aware code search and navigation. Still under active development.
-License: MIT
+License: MIT + file LICENSE
 Encoding: UTF-8
 Depends: R (>= 3.6)
+LinkingTo: Rcpp
 Imports:
     cli,
-    optparse,
+    Rcpp,
     RProtoBuf,
     Rapp,
     stringi
@@ -26,6 +27,8 @@ Suggests:
 LazyData: false
 RoxygenNote: 7.3.3.9000
 Collate:
+    'RcppExports.R'
+    'benchmark.R'
     'cli.R'
     'diagnostics.R'
     'workspace.R'
@@ -40,6 +43,7 @@ Collate:
     'symbols-s4.R'
     'symbols-s3.R'
     'symbols-qualified.R'
+    'symbol-table.R'
     'symbols.R'
     'occurrences.R'
     'serializer.R'

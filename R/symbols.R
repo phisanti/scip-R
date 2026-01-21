@@ -1,4 +1,5 @@
 #' @include utils.R
+#' @include benchmark.R
 #' @include parser.R
 #' @include documentation.R
 #' @include parse-tree-utils.R
@@ -10,33 +11,86 @@
 #' @include symbols-shiny.R
 NULL
 
-# This script derives symbol definitions and relationships from parsed modules.
-# It maps R constructs into SCIP-compatible descriptors and metadata bundles.
-# Integrated with symbols-qualified.R for package-qualified symbol tracking.
-# Uses symbol-table.R for cross-file reference resolution.
+# =============================================================================
+# SYMBOL RESOLUTION MODULE
+# =============================================================================
+#
+# This module extracts symbol definitions and references from parsed R ASTs,
+# producing SCIP-compatible symbol information and occurrence records.
+#
+# ARCHITECTURE:
+#   1. Core symbol resolution has two implementations:
+#      - C++ (src/tree_ops.cpp): Used by default for performance (~2x faster)
+#      - R (this file): Serves as fallback and reference implementation
+#
+#   2. Specialized symbol extraction (always in R):
+#      - S3 generics/methods: symbols-s3.R
+#      - S4 classes/methods: symbols-s4.R
+#      - R6 classes: symbols-r6.R
+#      - Shiny modules: symbols-shiny.R
+#      - Package-qualified refs: symbols-qualified.R
+#
+# MAINTENANCE:
+#   - The C++ implementation mirrors the R logic; keep them in sync
+#   - Test changes with: R CMD INSTALL . && index playbase
+#   - Compare outputs with: scripts/compare_scip_indexes.R
+#
+# SEE ALSO:
+#   - src/tree_ops.cpp (Phase 4B section) for C++ implementation
+#   - symbol-table.R for cross-file resolution infrastructure
+# =============================================================================
 
 #' Resolve symbols present in an AST module.
 #'
-#' Uses a package-wide symbol table (when provided) to enable cross-file reference
-#' resolution. When a function call references a symbol defined in another file,
-#' the occurrence will point to the same global symbol ID as the definition.
+#' Analyzes parsed R code to extract symbol definitions and references,
+#' producing SCIP-compatible symbol information. Uses a C++ implementation
+#' for performance with automatic R fallback.
 #'
-#' @param ast_module List produced by `parse_file()` containing expressions and parse data.
-#' @param workspace Workspace context with metadata and dependencies.
-#' @param track_externals Logical; if TRUE, track package-qualified external symbols (default: TRUE).
-#' @param symbol_table Optional symbol table from `build_symbol_table()` for cross-file resolution.
-#' @return A list containing symbol information, occurrence records, and external references.
+#' @section Cross-file Resolution:
+#' When a symbol_table is provided, references to symbols defined in other
+#' files will resolve to the same global symbol ID as the definition. This
+#' enables "go to definition" across files.
+#'
+#' @section Performance:
+#' The core resolution loop is implemented in C++ (see `src/tree_ops.cpp`,
+#' Phase 4B section) for ~2x overall speedup. The R implementation below
+#' serves as fallback and reference.
+#'
+#' @param ast_module List produced by `parse_file()` containing:
+#'   - `parse_data`: DataFrame from getParseData()
+#'   - `file_info`: List with path and relative_path
+#' @param workspace Workspace context from `analyze_workspace()` with
+#'   metadata and dependency information.
+#' @param track_externals Logical; if TRUE (default), extract package-qualified
+#'   symbols like `pkg::func` and `pkg:::internal`.
+#' @param symbol_table Optional symbol table from `build_symbol_table()`.
+#'   When provided, enables cross-file reference resolution.
+#' @param tree_index Optional pre-built tree index from `build_tree_index()`.
+#'   If NULL, one will be built. Passing a cached index improves performance.
+#'
+#' @return A list with three components:
+#'   \describe{
+#'     \item{symbols}{List of symbol definitions, each with:
+#'       symbol (ID), display_name, kind, documentation, relationships}
+#'     \item{occurrences}{List of all symbol uses, each with:
+#'       symbol (ID), range (line1, col1, line2, col2), role ("definition"/"reference")}
+#'     \item{external_refs}{Package-qualified references grouped by package}
+#'   }
+#'
 #' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "script.R", relative_path = "script.R"))
-#' resolve_symbols(ast, analyze_workspace(tempdir()))
-#' resolve_symbols(ast, analyze_workspace(tempdir()), track_externals = FALSE)
-#' # With symbol table for cross-file resolution:
+#' workspace <- analyze_workspace(tempdir())
+#'
+#' # Basic usage (no cross-file resolution)
+#' result <- resolve_symbols(ast, workspace)
+#'
+#' # With cross-file resolution
 #' symbol_table <- build_symbol_table(parsed_files, workspace)
-#' resolve_symbols(ast, workspace, symbol_table = symbol_table)
+#' result <- resolve_symbols(ast, workspace, symbol_table = symbol_table)
 #' }
-resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbol_table = NULL) {
+resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbol_table = NULL, tree_index = NULL) {
   data <- ast_module$parse_data
   if (is.null(data) || nrow(data) == 0) {
     return(list(symbols = list(), occurrences = list(), external_refs = list()))
@@ -45,106 +99,204 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   file_info <- ast_module$file_info %||% list(relative_path = basename(ast_module$file_info$path))
   relative_path <- file_info$relative_path %||% basename(file_info$path)
 
-  # Build tree index once for O(1) lookups throughout this function
-  tree_index <- build_tree_index(data)
-
-  assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
-  assignment_rows <- data[data$token %in% assignment_tokens, , drop = FALSE]
-  symbols <- list()
-  occurrences <- list()
-  seen_symbols <- character()
-
-  # Track definition scopes for relationship building
-  # Maps symbol_id -> list(node_id = expr_id, line1, col1, line2, col2)
-  definition_scopes <- list()
-
-  # FIX 1: Include SYMBOL_FORMALS to detect function parameters
-  symbol_rows <- data[data$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL", "SYMBOL_FORMALS"), ]
-  symbol_rows <- symbol_rows[order(symbol_rows$line1, symbol_rows$col1), , drop = FALSE]
-
-  for (idx in seq_len(nrow(symbol_rows))) {
-    row <- symbol_rows[idx, ]
-    name <- row$text
-    kind <- determine_symbol_kind_indexed(row, data, tree_index)
-
-    # Determine if this is a definition
-    # SYMBOL_FORMALS are always definitions (function parameters)
-    if (row$token == "SYMBOL_FORMALS") {
-      is_definition <- TRUE
-      is_local_scope <- TRUE  # Parameters are always local to their function
-    } else {
-      # FIX 2: Check for loop variables (forcond parent) - use indexed lookup
-      parent_id <- get_parent_id_indexed(row$id, tree_index)
-      parent_token <- if (!is.na(parent_id)) {
-        row_idx <- get_row_indexed(parent_id, tree_index)
-        if (!is.na(row_idx)) data$token[row_idx] else NA
-      } else {
-        NA
-      }
-      is_loop_var <- !is.na(parent_token) && parent_token == "forcond"
-
-      # Check for assignment
-      on_assignment_line <- any(assignment_rows$line1 == row$line1 & assignment_rows$col1 > row$col1)
-
-      is_definition <- is_loop_var || (row$token == "SYMBOL" && on_assignment_line)
-
-      # Check if this is inside a function (local scope)
-      is_local_scope <- is_loop_var ||
-        row$token == "SYMBOL_FORMALS" ||
-        is_inside_function(row, data, tree_index)
-    }
-
-    # Resolve the symbol ID using the symbol table or fallback
-    resolved <- resolve_symbol_id(
-      name = name,
-      kind = kind,
-      is_definition = is_definition,
-      is_local_scope = is_local_scope,
-      is_call = (row$token == "SYMBOL_FUNCTION_CALL"),
-      relative_path = relative_path,
-      symbol_table = symbol_table,
-      workspace = workspace
-    )
-
-    symbol_id <- resolved$symbol_id
-
-    # For definitions in this file, check if we've already seen this symbol
-    if (is_definition && symbol_id %in% seen_symbols) {
-      is_definition <- FALSE
-    }
-
-    role <- if (is_definition) "definition" else "reference"
-
-    if (is_definition) {
-      symbols[[length(symbols) + 1]] <- list(
-        symbol = symbol_id,
-        display_name = name,
-        kind = kind,
-        documentation = extract_roxygen_documentation(data, row$line1)
-      )
-      seen_symbols <- c(seen_symbols, symbol_id)
-
-      # Track scope for function definitions to build relationships later
-      if (kind == "function") {
-        scope_info <- get_function_scope(row, data, tree_index)
-        if (!is.null(scope_info)) {
-          definition_scopes[[symbol_id]] <- scope_info
-        }
-      }
-    }
-
-    occurrences[[length(occurrences) + 1]] <- list(
-      symbol = symbol_id,
-      range = c(row$line1, row$col1, row$line2, row$col2),
-      role = role
-    )
+  # OPTIMIZATION: Reuse tree index from Phase 2 if available, otherwise build it
+  if (is.null(tree_index)) {
+    t_idx <- bench_start("build_tree_index", list(row_count = nrow(data)))
+    tree_index <- build_tree_index(data)
+    bench_end(t_idx)
+  } else {
+    bench_count("tree_index_reuse")
   }
 
-  # Build relationships: for each function definition, find references within its scope
-  symbols <- build_symbol_relationships(symbols, occurrences, definition_scopes)
+  # Get definitions_env from symbol_table for O(1) lookups
+  definitions_env <- if (!is.null(symbol_table)) symbol_table$definitions_env else NULL
+
+  # ============================================================================
+  # C++ IMPLEMENTATION (Phase 4B)
+  # ============================================================================
+  # The C++ implementation in src/tree_ops.cpp provides ~2x overall speedup
+  # by moving the hot loop (symbol iteration + resolution) to native code.
+  #
+  # Prerequisites for C++ path:
+  #   1. Rcpp must be available (rcpp_available())
+  #   2. Tree index must have C++ pointer (tree_index$cpp_index)
+  #   3. resolve_symbols_cpp must be loaded
+  #
+  # If C++ fails, we fall back to the R implementation below (same algorithm).
+  # ============================================================================
+  cpp_result <- NULL
+  use_cpp <- rcpp_available() &&
+             !is.null(tree_index$cpp_index) &&
+             exists("resolve_symbols_cpp", mode = "function")
+
+  if (use_cpp) {
+    t_cpp <- bench_start("resolve_symbols_cpp", list(row_count = nrow(data)))
+    cpp_result <- tryCatch(
+      resolve_symbols_cpp(
+        parse_data = data,
+        tree_index_ptr = tree_index$cpp_index,
+        inside_function = tree_index$inside_function %||% logical(nrow(data)),
+        definitions_env = definitions_env %||% new.env(hash = TRUE, parent = emptyenv()),
+        base_r_funcs = BASE_R_FUNCTIONS,
+        relative_path = relative_path,
+        package_name = if (!is.null(symbol_table)) symbol_table$package_name else "unknown",
+        r_version = get_r_version()
+      ),
+      error = function(e) {
+        # Log the error for debugging (visible with SCIPR_BENCH=1)
+        bench_count("cpp_resolve_error")
+        cli::cli_alert_warning(
+          "C++ symbol resolution failed, using R fallback: {conditionMessage(e)}"
+        )
+        NULL
+      }
+    )
+    bench_end(t_cpp)
+  }
+
+  # If C++ succeeded, convert to list format and continue with post-processing
+  if (!is.null(cpp_result)) {
+    bench_count("cpp_resolve_success")
+
+    # Convert DataFrames to list format
+    symbols <- df_to_symbol_list(cpp_result$symbols)
+    occurrences <- df_to_occurrence_list(cpp_result$occurrences)
+
+    # NOTE: We no longer build IsReference relationships here.
+    # Standard SCIP pattern stores references as Occurrences with SymbolRoles=8,
+    # not as SymbolInformation.Relationships. Relationships are reserved for
+    # IsImplementation (class inheritance) and IsTypeDefinition only.
+
+  } else {
+    # ============================================================================
+    # R FALLBACK IMPLEMENTATION
+    # ============================================================================
+    # This is the reference implementation of symbol resolution. It serves as:
+    #   1. Fallback when C++ is unavailable or fails
+    #   2. Documentation of the algorithm (readable R code)
+    #   3. Baseline for validating C++ implementation correctness
+    #
+    # The algorithm mirrors resolve_symbols_cpp() in src/tree_ops.cpp exactly.
+    # If you change logic here, update the C++ version too!
+    # ============================================================================
+    bench_count("r_fallback_resolve")
+
+    # Pre-compute assignment positions for O(1) line lookup
+    # Use environment for fast "is there assignment on this line" check
+    assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
+    assignment_rows <- data[data$token %in% assignment_tokens, , drop = FALSE]
+    assignment_by_line <- new.env(hash = TRUE, parent = emptyenv())
+    for (i in seq_len(nrow(assignment_rows))) {
+      line_key <- as.character(assignment_rows$line1[i])
+      if (is.null(assignment_by_line[[line_key]])) {
+        assignment_by_line[[line_key]] <- list()
+      }
+      assignment_by_line[[line_key]][[length(assignment_by_line[[line_key]]) + 1]] <- assignment_rows$col1[i]
+    }
+
+    symbols <- list()
+    occurrences <- list()
+    # OPTIMIZATION: Use environment for O(1) seen symbol check instead of %in%
+    seen_symbols_env <- new.env(hash = TRUE, parent = emptyenv())
+
+    # LAZY LOCAL SYMBOL CREATION: Create local symbols on-demand
+    # Maps position_key -> symbol_id for deduplication
+    local_symbol_registry <- new.env(hash = TRUE, parent = emptyenv())
+    local_counter <- 0L
+
+    # FIX 1: Include SYMBOL_FORMALS to detect function parameters
+    symbol_rows <- data[data$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL", "SYMBOL_FORMALS"), ]
+    symbol_rows <- symbol_rows[order(symbol_rows$line1, symbol_rows$col1), , drop = FALSE]
+
+    n_symbols <- nrow(symbol_rows)
+    for (idx in seq_len(n_symbols)) {
+      bench_count("symbol_iteration")
+      row <- symbol_rows[idx, ]
+      name <- row$text
+      kind <- determine_symbol_kind_indexed(row, data, tree_index)
+
+      # Determine if this is a definition
+      # SYMBOL_FORMALS are always definitions (function parameters)
+      if (row$token == "SYMBOL_FORMALS") {
+        is_definition <- TRUE
+        is_local_scope <- TRUE  # Parameters are always local to their function
+      } else {
+        # FIX 2: Check for loop variables (forcond parent) - use indexed lookup
+        parent_id <- get_parent_id_indexed(row$id, tree_index)
+        parent_token <- if (!is.na(parent_id)) {
+          row_idx_val <- get_row_indexed(parent_id, tree_index)
+          if (!is.na(row_idx_val)) data$token[row_idx_val] else NA
+        } else {
+          NA
+        }
+        is_loop_var <- !is.na(parent_token) && parent_token == "forcond"
+
+        # Check for assignment - O(1) line lookup
+        line_key <- as.character(row$line1)
+        line_assignments <- assignment_by_line[[line_key]]
+        on_assignment_line <- if (!is.null(line_assignments)) {
+          any(vapply(line_assignments, function(col) col > row$col1, logical(1)))
+        } else {
+          FALSE
+        }
+
+        is_definition <- is_loop_var || (row$token == "SYMBOL" && on_assignment_line)
+
+        # Check if this is inside a function (local scope)
+        # OPTIMIZATION: Use O(1) pre-computed lookup instead of O(depth) tree walk
+        is_local_scope <- is_loop_var ||
+          row$token == "SYMBOL_FORMALS" ||
+          is_inside_function_indexed(row$id, tree_index)
+      }
+
+      # LAZY LOCAL SYMBOL CREATION: Resolve symbol with environment lookups
+      symbol_id <- resolve_symbol_id_fast(
+        name = name,
+        kind = kind,
+        is_definition = is_definition,
+        is_local_scope = is_local_scope,
+        is_call = (row$token == "SYMBOL_FUNCTION_CALL"),
+        relative_path = relative_path,
+        definitions_env = definitions_env,
+        local_registry = local_symbol_registry,
+        local_counter_env = environment()  # For updating local_counter
+      )
+
+      # For definitions in this file, check if we've already seen this symbol
+      if (is_definition && !is.null(seen_symbols_env[[symbol_id]])) {
+        is_definition <- FALSE
+      }
+
+      role <- if (is_definition) "definition" else "reference"
+
+      if (is_definition) {
+        symbols[[length(symbols) + 1]] <- list(
+          symbol = symbol_id,
+          display_name = name,
+          kind = kind,
+          documentation = extract_roxygen_documentation(data, row$line1)
+        )
+        seen_symbols_env[[symbol_id]] <- TRUE
+
+      }
+
+      occurrences[[length(occurrences) + 1]] <- list(
+        symbol = symbol_id,
+        range = c(row$line1, row$col1, row$line2, row$col2),
+        role = role
+      )
+    }
+
+    # NOTE: We no longer build IsReference relationships here.
+    # Standard SCIP pattern stores references as Occurrences with SymbolRoles=8,
+    # not as SymbolInformation.Relationships. Relationships are reserved for
+    # IsImplementation (class inheritance) and IsTypeDefinition only.
+  }
 
   # Extract S3 symbols (generics and methods)
+  t_s3 <- bench_start("extract_s3_symbols")
   s3_symbols <- build_s3_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  bench_end(t_s3, list(s3_count = length(s3_symbols)))
   
   if (length(s3_symbols) > 0) {
     # Merge S3 symbols into main symbol list
@@ -163,7 +315,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   }
 
   # Extract R6 class symbols (classes, methods, fields)
+  t_r6 <- bench_start("extract_r6_symbols")
   r6_symbols <- build_r6_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  bench_end(t_r6, list(r6_count = length(r6_symbols)))
   
   if (length(r6_symbols) > 0) {
     for (r6_sym in r6_symbols) {
@@ -172,7 +326,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   }
 
   # Extract S4 class symbols (classes, generics, methods, slots)
+  t_s4 <- bench_start("extract_s4_symbols")
   s4_symbols <- build_s4_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  bench_end(t_s4, list(s4_count = length(s4_symbols)))
   
   if (length(s4_symbols) > 0) {
     for (s4_sym in s4_symbols) {
@@ -181,7 +337,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   }
 
   # Extract Shiny symbols (modules, reactives, observers, outputs)
+  t_shiny <- bench_start("extract_shiny_symbols")
   shiny_symbols <- build_shiny_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  bench_end(t_shiny, list(shiny_count = length(shiny_symbols)))
   
   if (length(shiny_symbols) > 0) {
     for (shiny_sym in shiny_symbols) {
@@ -192,7 +350,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   # Extract package-qualified external symbols (pkg::symbol and pkg:::symbol)
   external_refs <- list()
   if (track_externals) {
+    t_qual <- bench_start("extract_qualified_symbols")
     qualified_symbols <- extract_qualified_symbols(ast_module)
+    bench_end(t_qual, list(qualified_count = length(qualified_symbols)))
     
     # Build external references grouped by package
     for (qual in qualified_symbols) {
@@ -243,126 +403,66 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   )
 }
 
-#' Build a unique SCIP symbol identifier (legacy fallback).
+#' Fast symbol ID resolution using environment lookups.
 #'
-#' @description
-#' This function is kept for backwards compatibility but is deprecated.
-#' Use `resolve_symbol_id()` with a symbol table for proper cross-file resolution.
-#'
-#' @param name Symbol name.
-#' @param relative_path Document-relative path.
-#' @param namespace Optional namespace prefix.
-#' @return Symbol identifier string following SCIP local symbol format.
-#' @keywords internal
-build_symbol_id <- function(name, relative_path, namespace = NULL) {
-  ns_prefix <- if (!is.null(namespace) && nzchar(namespace)) paste0(namespace, "/") else ""
-  sanitized_path <- gsub("[^A-Za-z0-9_/]", "_", relative_path)
-  sanitized_name <- gsub("[^A-Za-z0-9_]", "_", name)
-  local_id <- paste0(ns_prefix, sanitized_path, "#", sanitized_name)
-  paste("local", local_id)
-}
-
-#' Check if a symbol occurrence is inside a function body.
-#'
-#' Walks up the AST to check if this symbol is nested within a FUNCTION node.
-#' Used to determine if a variable should be local-scoped.
-#'
-#' @param row Parse data row for the symbol.
-#' @param parse_data Full parse data frame.
-#' @param tree_index Tree index from build_tree_index().
-#' @return TRUE if inside a function, FALSE otherwise.
-#' @keywords internal
-is_inside_function <- function(row, parse_data, tree_index) {
-  current_id <- row$id
-
-  while (!is.na(current_id)) {
-    parent_id <- get_parent_id_indexed(current_id, tree_index)
-    if (is.na(parent_id)) {
-      break
-    }
-
-    row_idx <- get_row_indexed(parent_id, tree_index)
-    if (is.na(row_idx)) {
-      break
-    }
-
-    parent_token <- parse_data$token[row_idx]
-
-    if (parent_token == "FUNCTION") {
-      return(TRUE)
-    }
-
-    current_id <- parent_id
-  }
-
-  FALSE
-}
-
-#' Resolve a symbol to its appropriate SCIP symbol ID.
-#'
-#' This is the main resolution function that determines the correct symbol ID
-#' based on the symbol table, symbol type, and context. It handles:
-#' - Package-level definitions (global symbols)
-#' - Cross-file references (resolved via symbol table)
-#' - Base R functions (external references)
-#' - Local variables (file-scoped symbols)
+#' OPTIMIZATION: Uses O(1) environment lookups instead of named list access.
+#' Implements lazy local symbol creation - only creates local symbols when needed.
 #'
 #' @param name Symbol name.
-#' @param kind Symbol kind (function, variable, etc.).
-#' @param is_definition Whether this is a definition occurrence.
-#' @param is_local_scope Whether this symbol is in a local scope (inside function).
+#' @param kind Symbol kind.
+#' @param is_definition Whether this is a definition.
+#' @param is_local_scope Whether in local scope.
 #' @param is_call Whether this is a function call.
-#' @param relative_path Current file's relative path.
-#' @param symbol_table Optional symbol table from build_symbol_table().
-#' @param workspace Workspace context.
-#' @return List with symbol_id and resolution info.
+#' @param relative_path Current file path.
+#' @param definitions_env Environment from symbol_table$definitions_env (or NULL).
+#' @param local_registry Environment for lazy local symbol creation.
+#' @param local_counter_env Environment containing local_counter variable.
+#' @return Symbol ID string.
 #' @keywords internal
-resolve_symbol_id <- function(name, kind, is_definition, is_local_scope,
-                               is_call, relative_path, symbol_table, workspace) {
-  # If no symbol table, fall back to legacy behavior
-  if (is.null(symbol_table)) {
-    return(list(
-      symbol_id = build_symbol_id(name, relative_path, workspace$metadata$namespace),
-      resolved_to = "local"
-    ))
+resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
+                                    is_call, relative_path, definitions_env,
+                                    local_registry, local_counter_env) {
+  bench_count("phase3_resolve_fast")
+
+  # If no definitions_env, fall back to local symbol
+  if (is.null(definitions_env)) {
+    bench_count("phase3_fast_no_table")
+    return(build_local_symbol_id(name, relative_path))
   }
 
   # For truly local symbols (params, loop vars, vars inside functions),
   # use local symbol IDs unless it's a function call that might resolve globally
   if (is_local_scope && is_definition && kind != "function") {
-    return(list(
-      symbol_id = build_local_symbol_id(name, relative_path),
-      resolved_to = "local"
-    ))
+    bench_count("phase3_fast_local_def")
+    return(build_local_symbol_id(name, relative_path))
   }
 
-  # Check symbol table for package-level definitions
-  if (name %in% names(symbol_table$definitions)) {
-    def <- symbol_table$definitions[[name]]
-    return(list(
-      symbol_id = def$symbol_id,
-      resolved_to = symbol_table$package_name,
-      is_exported = def$exported,
-      defined_in = def$file
-    ))
+  # O(1) lookup in definitions environment
+  def <- definitions_env[[name]]
+  if (!is.null(def)) {
+    bench_count("phase3_fast_table_hit")
+    return(def$symbol_id)
   }
 
-  # For function calls, check if it's a base R function
+  # For function calls, check base R
   if (is_call && is_base_r_function(name)) {
-    return(list(
-      symbol_id = build_external_symbol_id(name, "base", get_r_version(), "function"),
-      resolved_to = "base"
-    ))
+    bench_count("phase3_fast_base_r")
+    return(build_external_symbol_id(name, "base", get_r_version(), "function"))
   }
 
-  # Unresolved - use local symbol ID (file-scoped)
-  # This handles:
-  # - Variables that aren't in the symbol table
-  # - Functions from attached packages (library() calls) that we can't resolve
-  list(
-    symbol_id = build_local_symbol_id(name, relative_path),
-    resolved_to = "local"
-  )
+  # LAZY LOCAL SYMBOL CREATION:
+  # Create local symbol on-demand, deduplicate by name within file
+  bench_count("phase3_fast_local_lazy")
+  local_key <- paste0(relative_path, "#", name)
+  existing <- local_registry[[local_key]]
+  if (!is.null(existing)) {
+    return(existing)
+  }
+
+  # Create new local symbol
+  symbol_id <- build_local_symbol_id(name, relative_path)
+  local_registry[[local_key]] <- symbol_id
+  symbol_id
 }
 
 #' Check if symbol is defined as a function.
@@ -484,107 +584,85 @@ merge_external_refs <- function(refs1, refs2) {
   result
 }
 
-#' Get the scope (range) of a function definition.
+# NOTE: get_function_scope() and build_symbol_relationships() were removed.
+# These functions created IsReference relationships which is non-standard.
+# Standard SCIP pattern stores references as Occurrences with SymbolRoles=8,
+# not as SymbolInformation.Relationships. Relationships are reserved for
+# IsImplementation (class inheritance) and IsTypeDefinition only.
+# See: .active_plans/align_scip-R_to_standard.md
+
+# ============================================================================
+# C++ RESULT CONVERTERS
+# ============================================================================
+# These functions convert the DataFrame output from resolve_symbols_cpp()
+# to the list format expected by downstream code (serializer, relationships).
+#
+# The C++ implementation returns DataFrames for efficiency (columnar storage),
+# but the rest of the R code expects lists of records. These converters bridge
+# that gap.
+#
+# NOTE: This conversion has some overhead, but it's small compared to the
+# time saved by running the main loop in C++.
+# ============================================================================
+
+#' Convert C++ symbols DataFrame to list format.
 #'
-#' Given a symbol row that defines a function, finds the expression containing
-#' the entire function definition (including the body) and returns its range.
+#' Transforms the columnar DataFrame from resolve_symbols_cpp() into a list
+#' of symbol records, each containing symbol ID, display name, and kind.
 #'
-#' @param row Parse-data row for the symbol being defined.
-#' @param parse_data Full parse-data frame.
-#' @param index Tree index from build_tree_index().
-#' @return List with line1, col1, line2, col2 of the function scope, or NULL if not found.
+#' @param df DataFrame with columns:
+#'   \describe{
+#'     \item{symbol}{Character: unique symbol ID}
+#'     \item{display_name}{Character: human-readable name}
+#'     \item{kind}{Character: "function", "variable", "parameter", "call"}
+#'   }
+#' @return List of symbol entries, each a list with components:
+#'   symbol, display_name, kind, documentation (empty placeholder)
 #' @keywords internal
-get_function_scope <- function(row, parse_data, index) {
-  # Find the assignment expression containing this symbol
-  # The function body will be a descendant of this expression
-  assignment_row <- find_on_same_line_indexed(row$id, index, c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN"), "after")
-
-  if (nrow(assignment_row) == 0) {
-    return(NULL)
+#' @seealso \code{\link{resolve_symbols_cpp}} for the C++ implementation
+df_to_symbol_list <- function(df) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(list())
   }
 
-  # Get the parent expression that contains the entire assignment
-  expr_row <- find_ancestor_of_type_indexed(assignment_row$id[1], "expr", index)
-
-  if (nrow(expr_row) == 0) {
-    return(NULL)
-  }
-
-  list(
-    node_id = expr_row$id[1],
-    line1 = expr_row$line1[1],
-    col1 = expr_row$col1[1],
-    line2 = expr_row$line2[1],
-    col2 = expr_row$col2[1]
-  )
+  # Note: documentation is added as empty placeholder because C++ doesn't
+  # extract roxygen docs. Documentation is added later by the R post-processing.
+  lapply(seq_len(nrow(df)), function(i) {
+    list(
+      symbol = df$symbol[i],
+      display_name = df$display_name[i],
+      kind = df$kind[i],
+      documentation = list()
+    )
+  })
 }
 
-#' Build relationships for symbols based on their scopes.
+#' Convert C++ occurrences DataFrame to list format.
 #'
-#' For each symbol with a defined scope (e.g., function definitions), finds all
-#' reference occurrences within that scope and adds them as relationships.
+#' Transforms the columnar DataFrame from resolve_symbols_cpp() into a list
+#' of occurrence records, each containing symbol ID, source range, and role.
 #'
-#' @param symbols List of symbol entries from resolve_symbols().
-#' @param occurrences List of occurrence entries from resolve_symbols().
-#' @param definition_scopes Named list mapping symbol_id to scope info.
-#' @return Updated symbols list with relationships field populated.
+#' @param df DataFrame with columns:
+#'   \describe{
+#'     \item{symbol}{Character: symbol ID this occurrence refers to}
+#'     \item{line1, col1}{Integer: start position (1-based)}
+#'     \item{line2, col2}{Integer: end position (1-based)}
+#'     \item{role}{Character: "definition" or "reference"}
+#'   }
+#' @return List of occurrence entries, each a list with components:
+#'   symbol, range (4-element vector), role
 #' @keywords internal
-build_symbol_relationships <- function(symbols, occurrences, definition_scopes) {
-  if (length(definition_scopes) == 0 || length(occurrences) == 0) {
-    return(symbols)
+#' @seealso \code{\link{resolve_symbols_cpp}} for the C++ implementation
+df_to_occurrence_list <- function(df) {
+  if (is.null(df) || nrow(df) == 0) {
+    return(list())
   }
 
-  # For efficiency, build a lookup from symbol_id to symbol index
-  symbol_idx_map <- stats::setNames(
-    seq_along(symbols),
-    vapply(symbols, function(s) s$symbol, character(1))
-  )
-
-  # Filter to reference occurrences only
-  ref_occurrences <- Filter(function(occ) identical(occ$role, "reference"), occurrences)
-
-  # For each definition with a scope, find references within that scope
-  for (def_symbol_id in names(definition_scopes)) {
-    scope <- definition_scopes[[def_symbol_id]]
-    sym_idx <- symbol_idx_map[[def_symbol_id]]
-
-    if (is.null(sym_idx)) next
-
-    # Find references that fall within this scope
-    # A reference is in scope if its range is contained within the scope range
-    refs_in_scope <- list()
-    seen_ref_symbols <- character()
-
-    for (ref_occ in ref_occurrences) {
-      ref_range <- ref_occ$range
-      ref_line <- ref_range[1]
-      ref_col <- ref_range[2]
-
-      # Check if reference is within scope (simple range containment)
-      in_scope <- (
-        (ref_line > scope$line1 || (ref_line == scope$line1 && ref_col >= scope$col1)) &&
-        (ref_line < scope$line2 || (ref_line == scope$line2 && ref_col <= scope$col2))
-      )
-
-      if (in_scope) {
-        ref_symbol <- ref_occ$symbol
-
-        # Skip self-references and duplicates
-        if (ref_symbol != def_symbol_id && !ref_symbol %in% seen_ref_symbols) {
-          refs_in_scope[[length(refs_in_scope) + 1]] <- list(
-            symbol = ref_symbol,
-            is_reference = TRUE
-          )
-          seen_ref_symbols <- c(seen_ref_symbols, ref_symbol)
-        }
-      }
-    }
-
-    # Add relationships to the symbol entry
-    if (length(refs_in_scope) > 0) {
-      symbols[[sym_idx]]$relationships <- refs_in_scope
-    }
-  }
-
-  symbols
+  lapply(seq_len(nrow(df)), function(i) {
+    list(
+      symbol = df$symbol[i],
+      range = c(df$line1[i], df$col1[i], df$line2[i], df$col2[i]),
+      role = df$role[i]
+    )
+  })
 }

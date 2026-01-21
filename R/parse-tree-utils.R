@@ -1,4 +1,7 @@
+#' @include benchmark.R
 #' @include parser.R
+#' @useDynLib scipR, .registration = TRUE
+#' @importFrom Rcpp sourceCpp
 NULL
 
 # This script provides parse tree navigation utilities for AST analysis.
@@ -15,12 +18,22 @@ NULL
 #' Pre-computes parent-child relationships from parse data to enable
 #' fast tree navigation without repeated data frame scans.
 #'
+#' When Rcpp is available, uses C++ implementation for better performance.
+#' Falls back to pure R implementation otherwise.
+#'
+#' Also pre-computes:
+#' - enclosing_function: For each node, the ID of its innermost enclosing FUNCTION/OP-LAMBDA
+#' - inside_function: Logical vector indicating if each node is inside a function body
+#'
 #' @param parse_data Parse data data.frame from getParseData().
 #' @return A list with:
 #'   - children: Named list mapping parent IDs to vectors of child IDs
 #'   - parent: Named vector mapping node IDs to parent IDs
 #'   - rows: Named list mapping node IDs to row indices in parse_data
 #'   - data: Reference to the original parse_data
+#'   - cpp_index: (optional) External pointer to C++ TreeIndex for fast lookups
+#'   - enclosing_function: Integer vector of enclosing function IDs (NA for top-level)
+#'   - inside_function: Logical vector indicating if node is inside a function
 #' @keywords internal
 #' @examples
 #' \dontrun{
@@ -29,14 +42,28 @@ NULL
 #' children <- get_children_indexed(5, index)
 #' }
 build_tree_index <- function(parse_data) {
+  bench_count("build_tree_index_call")
+
   if (is.null(parse_data) || nrow(parse_data) == 0) {
     return(list(
       children = list(),
       parent = integer(0),
       rows = list(),
       by_line = list(),
-      data = parse_data
+      data = parse_data,
+      cpp_index = NULL,
+      enclosing_function = integer(0),
+      inside_function = logical(0)
     ))
+  }
+
+  # Try to use C++ implementation for the index
+  cpp_index <- NULL
+  if (rcpp_available()) {
+    cpp_index <- tryCatch(
+      build_tree_index_cpp(parse_data$id, parse_data$parent, parse_data$line1),
+      error = function(e) NULL
+    )
   }
 
   # Pre-compute children: parent_id -> vector of child ids
@@ -56,14 +83,164 @@ build_tree_index <- function(parse_data) {
   func_lines <- unique(parse_data$line1[parse_data$token %in% func_tokens])
   has_func_on_line <- stats::setNames(rep(TRUE, length(func_lines)), as.character(func_lines))
 
+  # Pre-compute enclosing function for each node (O(n) single pass)
+  # This enables O(1) "is inside function" checks instead of O(depth) tree walks
+  scope_result <- build_scope_index(parse_data, rows, parent)
+
   list(
     children = children,
     parent = parent,
     rows = rows,
     by_line = by_line,
     has_func_on_line = has_func_on_line,
-    data = parse_data
+    data = parse_data,
+    cpp_index = cpp_index,
+    enclosing_function = scope_result$enclosing_function,
+    inside_function = scope_result$inside_function
   )
+}
+
+#' Build scope index with enclosing function for each node.
+#'
+#' Uses position-based containment to determine which function (if any)
+#' contains each node. The function scope is determined by the parent expr
+#' of the FUNCTION/OP-LAMBDA token (which contains the full body), not the
+#' token itself. Processes functions from largest to smallest so smaller
+#' (inner) functions overwrite larger (outer) ones.
+#'
+#' @param parse_data Parse data data.frame.
+#' @param rows Named vector mapping node IDs to row indices.
+#' @param parent Named vector mapping node IDs to parent IDs.
+#' @return List with enclosing_function (integer vector) and inside_function (logical vector).
+#' @keywords internal
+build_scope_index <- function(parse_data, rows, parent) {
+  n <- nrow(parse_data)
+  func_tokens <- c("FUNCTION", "OP-LAMBDA")
+  func_mask <- parse_data$token %in% func_tokens
+
+  if (!any(func_mask)) {
+    # No functions - everything is top-level
+    return(list(
+      enclosing_function = rep(NA_integer_, n),
+      inside_function = rep(FALSE, n)
+    ))
+  }
+
+  # Get the parent expr for each FUNCTION token - this gives the full function range
+  # The FUNCTION token itself only covers the keyword, not the body
+  func_ids <- parse_data$id[func_mask]
+  func_parent_ids <- parent[as.character(func_ids)]
+
+  # Get positions from parent expr nodes (which have full function body range)
+  func_parent_rows <- rows[as.character(func_parent_ids)]
+  valid_parents <- !is.na(func_parent_rows)
+
+  if (!any(valid_parents)) {
+    return(list(
+      enclosing_function = rep(NA_integer_, n),
+      inside_function = rep(FALSE, n)
+    ))
+  }
+
+  func_parent_rows <- func_parent_rows[valid_parents]
+  func_ids_valid <- func_ids[valid_parents]
+  func_line1 <- parse_data$line1[func_parent_rows]
+  func_col1 <- parse_data$col1[func_parent_rows]
+  func_line2 <- parse_data$line2[func_parent_rows]
+  func_col2 <- parse_data$col2[func_parent_rows]
+
+  # Try C++ implementation first
+  if (rcpp_available() && exists("build_scope_index_cpp", mode = "function")) {
+    result <- tryCatch(
+      {
+        enclosing <- build_scope_index_cpp(
+          parse_data$id,
+          parse_data$line1, parse_data$col1,
+          parse_data$line2, parse_data$col2,
+          func_ids_valid, func_line1, func_col1, func_line2, func_col2
+        )
+
+        # inside_function: TRUE if enclosing is not NA AND this node is not the function itself
+        inside <- !is.na(enclosing) & !func_mask
+
+        list(
+          enclosing_function = enclosing,
+          inside_function = inside
+        )
+      },
+      error = function(e) NULL
+    )
+    if (!is.null(result)) return(result)
+  }
+
+  # R fallback: position-based containment
+  build_scope_index_r(parse_data, func_mask, func_ids_valid, func_line1, func_col1, func_line2, func_col2)
+}
+
+#' Build scope index (pure R implementation).
+#'
+#' @param parse_data Parse data data.frame.
+#' @param func_mask Logical vector indicating FUNCTION/OP-LAMBDA nodes.
+#' @param func_ids Integer vector of function node IDs.
+#' @param func_line1 Integer vector of function scope start lines.
+#' @param func_col1 Integer vector of function scope start columns.
+#' @param func_line2 Integer vector of function scope end lines.
+#' @param func_col2 Integer vector of function scope end columns.
+#' @return List with enclosing_function and inside_function.
+#' @keywords internal
+build_scope_index_r <- function(parse_data, func_mask, func_ids, func_line1, func_col1, func_line2, func_col2) {
+  n <- nrow(parse_data)
+
+  # Build a data frame with function positions
+  func_rows <- data.frame(
+    id = func_ids,
+    line1 = func_line1,
+    col1 = func_col1,
+    line2 = func_line2,
+    col2 = func_col2
+  )
+
+  # Sort by size descending (outer functions first)
+  # Size = span in lines * 10000 + span in columns (approximation)
+  func_rows$size <- (func_rows$line2 - func_rows$line1) * 10000L +
+    (func_rows$col2 - func_rows$col1)
+  func_rows <- func_rows[order(-func_rows$size), , drop = FALSE]
+
+  # Initialize: no enclosing function
+  enclosing <- rep(NA_integer_, n)
+
+  # Process from largest (outermost) to smallest (innermost)
+  # Later (smaller) functions overwrite, giving innermost scope
+  for (i in seq_len(nrow(func_rows))) {
+    f <- func_rows[i, ]
+
+    # Vectorized containment check
+    # Node is contained if its range is within the function's range
+    start_ok <- (parse_data$line1 > f$line1) |
+      (parse_data$line1 == f$line1 & parse_data$col1 >= f$col1)
+    end_ok <- (parse_data$line2 < f$line2) |
+      (parse_data$line2 == f$line2 & parse_data$col2 <= f$col2)
+    contained <- start_ok & end_ok
+
+    enclosing[contained] <- f$id
+  }
+
+  # inside_function: TRUE if enclosing is not NA AND this node is not a FUNCTION/OP-LAMBDA itself
+  inside <- !is.na(enclosing) & !func_mask
+
+  list(
+    enclosing_function = enclosing,
+    inside_function = inside
+  )
+}
+
+#' Check if Rcpp C++ functions are available
+#'
+#' @return TRUE if Rcpp C++ functions are compiled and loaded, FALSE otherwise
+#' @keywords internal
+rcpp_available <- function() {
+  exists("build_tree_index_cpp", mode = "function") &&
+    is.function(get("build_tree_index_cpp", mode = "function"))
 }
 
 #' Get child IDs using pre-computed index (O(1)).
@@ -106,10 +283,46 @@ get_row_indexed <- function(node_id, index) {
   }
 }
 
+#' Check if a node is inside a function body using pre-computed index (O(1)).
+#'
+#' Uses the pre-computed inside_function vector from build_tree_index()
+#' for O(1) lookup instead of O(depth) tree walking.
+#'
+#' @param node_id Numeric ID of the node to check.
+#' @param index Tree index from build_tree_index().
+#' @return Logical indicating if node is inside a function body.
+#' @keywords internal
+is_inside_function_indexed <- function(node_id, index) {
+  row_idx <- get_row_indexed(node_id, index)
+  if (is.na(row_idx)) {
+    return(FALSE)
+  }
+  isTRUE(index$inside_function[row_idx])
+}
+
+#' Get the enclosing function ID for a node using pre-computed index (O(1)).
+#'
+#' Uses the pre-computed enclosing_function vector from build_tree_index()
+#' for O(1) lookup instead of O(depth) tree walking.
+#'
+#' @param node_id Numeric ID of the node.
+#' @param index Tree index from build_tree_index().
+#' @return Integer ID of enclosing function, or NA if at top-level.
+#' @keywords internal
+get_enclosing_function_indexed <- function(node_id, index) {
+  row_idx <- get_row_indexed(node_id, index)
+  if (is.na(row_idx)) {
+    return(NA_integer_)
+  }
+  index$enclosing_function[row_idx]
+}
+
 #' Check if node has descendant of given type using DFS with early exit.
 #'
 #' Efficiently checks if any descendant node has one of the specified token types.
 #' Uses depth-first search with early exit - stops as soon as a match is found.
+#'
+#' When C++ is available, uses optimized implementation with early exit.
 #'
 #' @param node_id Numeric ID of the starting node.
 #' @param token_types Character vector of token types to search for.
@@ -117,9 +330,33 @@ get_row_indexed <- function(node_id, index) {
 #' @return Logical indicating if a descendant of the specified type exists.
 #' @keywords internal
 has_descendant_of_type_indexed <- function(node_id, token_types, index) {
+  bench_count("has_descendant_check")
+
+  # Use C++ implementation if available
+  if (!is.null(index$cpp_index) && rcpp_available()) {
+    result <- tryCatch(
+      has_descendant_of_type_cpp(node_id, token_types, index$cpp_index, index$data$token),
+      error = function(e) NULL
+    )
+    if (!is.null(result)) return(result)
+  }
+
+  # Fallback to R implementation
+  has_descendant_of_type_indexed_r(node_id, token_types, index)
+}
+
+#' Check if node has descendant of given type (pure R implementation)
+#'
+#' @param node_id Numeric ID of the starting node.
+#' @param token_types Character vector of token types to search for.
+#' @param index Tree index from build_tree_index().
+#' @return Logical indicating if a descendant of the specified type exists.
+#' @keywords internal
+has_descendant_of_type_indexed_r <- function(node_id, token_types, index) {
   stack <- get_children_indexed(node_id, index)
 
   while (length(stack) > 0) {
+    bench_count("descendant_dfs_iteration")
     current <- stack[1]
     stack <- stack[-1]
 
@@ -140,14 +377,39 @@ has_descendant_of_type_indexed <- function(node_id, token_types, index) {
 
 #' Get all descendant IDs using iterative traversal (O(n)).
 #'
-#' Collects all descendant node IDs without the O(n^2) rbind overhead.
-#' Uses a worklist algorithm with pre-allocated output.
+#' Collects all descendant node IDs. When C++ is available, uses pre-allocated
+#' vectors with O(n) complexity. Falls back to R implementation otherwise.
+#'
+#' The C++ implementation eliminates the O(n^2) vector growth pattern that
+#' occurs with repeated c() calls in the R implementation.
 #'
 #' @param node_id Numeric ID of the starting node.
 #' @param index Tree index from build_tree_index().
 #' @return Integer vector of all descendant node IDs.
 #' @keywords internal
 get_descendant_ids_indexed <- function(node_id, index) {
+  # Use C++ implementation if available and index has cpp_index
+  if (!is.null(index$cpp_index) && rcpp_available()) {
+    return(tryCatch(
+      get_descendant_ids_cpp(node_id, index$cpp_index),
+      error = function(e) get_descendant_ids_indexed_r(node_id, index)
+    ))
+  }
+
+  # Fallback to R implementation
+  get_descendant_ids_indexed_r(node_id, index)
+}
+
+#' Get all descendant IDs (pure R implementation)
+#'
+#' This is the fallback R implementation. Note: This has O(n^2) complexity
+#' due to vector growth with c(). Use the C++ version for large trees.
+#'
+#' @param node_id Numeric ID of the starting node.
+#' @param index Tree index from build_tree_index().
+#' @return Integer vector of all descendant node IDs.
+#' @keywords internal
+get_descendant_ids_indexed_r <- function(node_id, index) {
   result <- integer(0)
   stack <- get_children_indexed(node_id, index)
 

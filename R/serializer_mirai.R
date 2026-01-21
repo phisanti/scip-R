@@ -29,10 +29,10 @@ serialize_documents_mirai <- function(files, workspace, output_path, daemons = p
 
   # Accumulate external references across all bundles
   all_external_refs <- list()
-  
+
   for (bundle in bundles) {
     write_document(serializer, bundle$document, diagnostics = bundle$diagnostics)
-    
+
     # Merge external refs if present in bundle
     if (!is.null(bundle$external_refs) && length(bundle$external_refs) > 0) {
       all_external_refs <- merge_external_refs(all_external_refs, bundle$external_refs)

@@ -10,7 +10,6 @@ NULL
 # Well-known base R functions that should resolve to base:: package
 # This is a curated list of commonly used base R functions
 BASE_R_FUNCTIONS <- c(
-
   # Core functions
   "c", "list", "vector", "matrix", "array", "data.frame", "factor",
   "length", "nrow", "ncol", "dim", "names", "rownames", "colnames",
@@ -20,10 +19,8 @@ BASE_R_FUNCTIONS <- c(
   "as.character", "as.numeric", "as.integer", "as.logical", "as.list",
   "as.vector", "as.matrix", "as.data.frame", "as.factor",
   # Math functions
-
   "sum", "mean", "median", "var", "sd", "min", "max", "range",
-
-"abs", "sqrt", "exp", "log", "log10", "log2", "sin", "cos", "tan",
+  "abs", "sqrt", "exp", "log", "log10", "log2", "sin", "cos", "tan",
   "floor", "ceiling", "round", "trunc", "sign",
   # String functions
   "paste", "paste0", "sprintf", "format", "nchar", "substr", "substring",
@@ -103,11 +100,25 @@ BASE_R_FUNCTIONS <- c(
 #' @keywords internal
 build_symbol_table <- function(parsed_files, workspace) {
   definitions <- list()
+  # Use environment for O(1) lookups in Phase 3
+  definitions_env <- new.env(hash = TRUE, parent = emptyenv())
   package_name <- workspace$metadata$project_name %||% "unknown"
   package_version <- workspace$metadata$project_version %||% "0.0.0-dev"
 
   # Parse NAMESPACE for exports (if available)
+  t_ns <- bench_start("phase2_parse_namespace")
   exports <- parse_namespace_exports(workspace$metadata$project_root)
+  bench_end(t_ns, list(export_count = length(exports)))
+
+  # Create environment for fast export lookup
+  exports_env <- new.env(hash = TRUE, parent = emptyenv())
+  for (exp in exports) {
+    exports_env[[exp]] <- TRUE
+  }
+
+  # Cache tree indices: file_path -> tree_index
+  # This avoids rebuilding in Phase 3
+  tree_indices <- list()
 
   # First pass: collect all top-level definitions from all files
   for (ast_module in parsed_files) {
@@ -119,20 +130,27 @@ build_symbol_table <- function(parsed_files, workspace) {
     relative_path <- file_info$relative_path %||% basename(file_info$path %||% "unknown")
 
     # Find all top-level definitions in this file
-    file_defs <- extract_top_level_definitions(ast_module)
+    # extract_top_level_definitions builds tree_index internally, so we capture it
+    t_extract <- bench_start("phase2_extract_definitions", list(file = relative_path))
+    extract_result <- extract_top_level_definitions_with_index(ast_module)
+    file_defs <- extract_result$definitions
+    tree_indices[[relative_path]] <- extract_result$tree_index
+    bench_end(t_extract, list(definition_count = length(file_defs)))
 
+    t_agg <- bench_start("phase2_aggregate_definitions", list(file = relative_path))
     for (def in file_defs) {
       name <- def$name
 
       # If symbol already defined in another file, keep the first definition
       # (R loads files alphabetically in a package, but we'll use first-seen)
-      if (!name %in% names(definitions)) {
-        definitions[[name]] <- list(
+      # Use environment lookup for O(1) check
+      if (is.null(definitions_env[[name]])) {
+        def_record <- list(
           name = name,
           file = relative_path,
           kind = def$kind,
           line = def$line,
-          exported = name %in% exports,
+          exported = !is.null(exports_env[[name]]),
           symbol_id = build_global_symbol_id(
             name = name,
             package_name = package_name,
@@ -140,15 +158,21 @@ build_symbol_table <- function(parsed_files, workspace) {
             kind = def$kind
           )
         )
+        definitions[[name]] <- def_record
+        definitions_env[[name]] <- def_record
       }
     }
+    bench_end(t_agg, list(total_definitions = length(definitions)))
   }
 
   list(
     definitions = definitions,
+    definitions_env = definitions_env,
     exports = exports,
+    exports_env = exports_env,
     package_name = package_name,
-    package_version = package_version
+    package_version = package_version,
+    tree_indices = tree_indices
   )
 }
 
@@ -164,11 +188,8 @@ build_symbol_table <- function(parsed_files, workspace) {
 #' @return SCIP symbol ID string.
 #' @keywords internal
 build_global_symbol_id <- function(name, package_name, package_version, kind = "function") {
-  # Format: scip-r r <package> <version> <name>().
-  # The suffix depends on kind:
-  #   - function: name().
-  #   - variable: name.
-  #   - class (R6/S4): name#
+  # Format: scip-r r <package> <version> <suffix>
+  # Suffix: functions get "()", variables get ".", classes get "#"
   suffix <- switch(
     kind,
     `function` = paste0(name, "()."),
@@ -222,41 +243,54 @@ build_local_symbol_id <- function(name, relative_path, scope_id = NULL) {
   paste("local", local_id)
 }
 
-#' Extract top-level definitions from a parsed AST module.
+#' Extract top-level definitions from a parsed AST module with tree index.
 #'
-#' Identifies functions, variables, and classes defined at the top level
-#' (not nested inside other functions).
+#' OPTIMIZATION: Returns both definitions AND the tree index so it can be
+#' reused in Phase 3 (symbol resolution), avoiding redundant tree building.
 #'
 #' @param ast_module Parsed AST module from parse_file().
-#' @return List of definition records with name, kind, line fields.
+#' @return List with: definitions (list), tree_index (index structure).
 #' @keywords internal
-extract_top_level_definitions <- function(ast_module) {
-
+extract_top_level_definitions_with_index <- function(ast_module) {
   data <- ast_module$parse_data
   if (is.null(data) || nrow(data) == 0) {
-    return(list())
+    return(list(definitions = list(), tree_index = NULL))
   }
 
   definitions <- list()
 
+  t_tree <- bench_start("phase2_build_tree_index", list(row_count = nrow(data)))
   tree_index <- build_tree_index(data)
+  bench_end(t_tree)
 
-  # Pre-compute set of node IDs inside function bodies (O(n) once, then O(1) lookups)
-  inside_function_ids <- compute_inside_function_ids(data, tree_index)
+  # Pre-compute set of node IDs inside function bodies
+  # Use the pre-computed inside_function logical vector from tree_index for O(1) lookup
+  t_precompute <- bench_start("phase2_precompute_function_scope", list(row_count = nrow(data)))
+  # tree_index$inside_function is already a logical vector indexed by row
+  # We just need to match assignment rows against it
+  bench_end(t_precompute, list(inside_count = sum(tree_index$inside_function %||% 0)))
 
   # Find all assignment tokens
+  t_find <- bench_start("phase2_find_assignments", list(row_count = nrow(data)))
   assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN")
   assignment_rows <- data[data$token %in% assignment_tokens, , drop = FALSE]
+  bench_end(t_find, list(assignment_count = nrow(assignment_rows)))
 
   # Pre-compute function tokens on each line for quick RHS check
   func_tokens <- c("FUNCTION", "OP-LAMBDA")
   func_token_rows <- data[data$token %in% func_tokens, , drop = FALSE]
 
+  t_analyze <- bench_start("phase2_analyze_assignments", list(assignment_count = nrow(assignment_rows)))
+  # Get inside_function mask for O(1) lookup by row index
+  inside_func_mask <- tree_index$inside_function %||% logical(nrow(data))
+
   for (i in seq_len(nrow(assignment_rows))) {
     assign_row <- assignment_rows[i, ]
 
     # O(1) check: is this assignment inside a function body?
-    if (as.character(assign_row$id) %in% inside_function_ids) {
+    # Use row index from tree_index for direct lookup
+    row_idx <- tree_index$rows[[as.character(assign_row$id)]]
+    if (!is.na(row_idx) && isTRUE(inside_func_mask[row_idx])) {
       next
     }
 
@@ -282,23 +316,58 @@ extract_top_level_definitions <- function(ast_module) {
       line = symbol_row$line1
     )
   }
+  bench_end(t_analyze, list(definition_count = length(definitions)))
 
-  definitions
+  list(definitions = definitions, tree_index = tree_index)
+}
+
+#' Extract top-level definitions from a parsed AST module.
+#'
+#' Identifies functions, variables, and classes defined at the top level
+#' (not nested inside other functions).
+#'
+#' @param ast_module Parsed AST module from parse_file().
+#' @return List of definition records with name, kind, line fields.
+#' @keywords internal
+extract_top_level_definitions <- function(ast_module) {
+  # Delegate to the new function but only return definitions for backward compat
+  extract_top_level_definitions_with_index(ast_module)$definitions
 }
 
 #' Pre-compute all node IDs that are inside function bodies.
 #'
-#' Does a single O(n) traversal to find all FUNCTION/OP-LAMBDA nodes,
-#' then collects all their descendants. Returns a character vector of
-#' node IDs for O(1) membership testing.
+#' OPTIMIZATION: Now uses the pre-computed inside_function vector from
+#' build_tree_index() for O(n) extraction instead of O(n * nesting_depth)
+#' descendant collection.
 #'
 #' @param parse_data Parse data data.frame.
 #' @param tree_index Tree index from build_tree_index().
 #' @return Character vector of node IDs inside function bodies.
 #' @keywords internal
 compute_inside_function_ids <- function(parse_data, tree_index) {
-  # Find all FUNCTION and OP-LAMBDA nodes
+  # OPTIMIZATION: Use pre-computed inside_function vector if available
+  # This is O(n) instead of O(n * nesting_depth)
+  if (!is.null(tree_index$inside_function) && length(tree_index$inside_function) > 0) {
+    inside_mask <- tree_index$inside_function
+    return(as.character(parse_data$id[inside_mask]))
+  }
 
+  # Fallback to legacy implementation for backward compatibility
+  compute_inside_function_ids_legacy(parse_data, tree_index)
+}
+
+#' Legacy implementation of inside function ID computation.
+#'
+#' Collects descendants for each function node. This has O(n * nesting_depth)
+#' complexity for nested functions. Kept for backward compatibility when
+#' tree_index doesn't have pre-computed inside_function.
+#'
+#' @param parse_data Parse data data.frame.
+#' @param tree_index Tree index from build_tree_index().
+#' @return Character vector of node IDs inside function bodies.
+#' @keywords internal
+compute_inside_function_ids_legacy <- function(parse_data, tree_index) {
+  # Find all FUNCTION and OP-LAMBDA nodes
   func_tokens <- c("FUNCTION", "OP-LAMBDA")
   func_rows <- parse_data[parse_data$token %in% func_tokens, , drop = FALSE]
 
@@ -306,18 +375,24 @@ compute_inside_function_ids <- function(parse_data, tree_index) {
     return(character(0))
   }
 
-  # Collect all descendants of function nodes
-  # These are the nodes "inside" function bodies
-  inside_ids <- character(0)
+  # Try C++ implementation if available
+  if (!is.null(tree_index$cpp_index) && rcpp_available()) {
+    result <- tryCatch(
+      {
+        ids <- compute_inside_function_ids_cpp(func_rows$id, tree_index$cpp_index)
+        as.character(ids)
+      },
+      error = function(e) NULL
+    )
+    if (!is.null(result)) return(result)
+  }
 
+  # R fallback: collect all descendants of function nodes
+  inside_ids <- character(0)
   for (func_id in func_rows$id) {
-    # Get all descendants of this function node
     desc_ids <- get_descendant_ids_indexed(func_id, tree_index)
     inside_ids <- c(inside_ids, as.character(desc_ids))
   }
-
-  # Return unique IDs as character for fast %in% lookup
-
   unique(inside_ids)
 }
 
@@ -339,42 +414,6 @@ is_function_assignment_fast <- function(assign_row, func_token_rows) {
   # Check if any function token is on same line and after assignment
   matches <- func_token_rows$line1 == line & func_token_rows$col1 > col
   any(matches)
-}
-
-#' Check if an assignment is at the top level (not nested in a function).
-#'
-#' @param assign_row Parse data row for the assignment token.
-#' @param parse_data Full parse data frame.
-#' @param tree_index Tree index for lookups.
-#' @return TRUE if top-level, FALSE otherwise.
-#' @keywords internal
-is_top_level_assignment <- function(assign_row, parse_data, tree_index) {
-  # Walk up the tree looking for FUNCTION tokens
-  # If we find one before reaching the root, this is nested
-  current_id <- assign_row$id
-
-  while (!is.na(current_id)) {
-    parent_id <- get_parent_id_indexed(current_id, tree_index)
-    if (is.na(parent_id)) {
-      break
-    }
-
-    row_idx <- get_row_indexed(parent_id, tree_index)
-    if (is.na(row_idx)) {
-      break
-    }
-
-    parent_token <- parse_data$token[row_idx]
-
-    # If we hit a FUNCTION token, this assignment is inside a function body
-    if (parent_token == "FUNCTION") {
-      return(FALSE)
-    }
-
-    current_id <- parent_id
-  }
-
-  TRUE
 }
 
 #' Find the symbol being assigned to in an assignment expression.
@@ -402,29 +441,6 @@ find_assignment_target <- function(assign_row, parse_data, tree_index) {
 
   # Return the closest symbol (highest column) before the assignment
   candidates[which.max(candidates$col1), ]
-}
-
-#' Check if an assignment creates a function.
-#'
-#' @param assign_row Parse data row for the assignment token.
-#' @param parse_data Full parse data frame.
-#' @param tree_index Tree index for lookups.
-#' @return TRUE if assigning a function, FALSE otherwise.
-#' @keywords internal
-is_function_assignment <- function(assign_row, parse_data, tree_index) {
-  # Find the parent expression containing this assignment
-  expr_row <- find_ancestor_of_type_indexed(assign_row$id, "expr", tree_index)
-
-  if (nrow(expr_row) == 0) {
-    return(FALSE)
-  }
-
-  # Check if the expression contains FUNCTION or OP-LAMBDA
-  has_descendant_of_type_indexed(
-    expr_row$id[1],
-    c("FUNCTION", "OP-LAMBDA"),
-    tree_index
-  )
 }
 
 #' Parse NAMESPACE file to get exported symbols.
@@ -515,8 +531,10 @@ get_r_version <- function() {
 resolve_symbol_reference <- function(name, symbol_table, current_file, scope_id = NULL, is_definition = FALSE) {
   # For definitions, always use the symbol table's ID if available
   # This ensures the definition and all references use the same ID
-  if (name %in% names(symbol_table$definitions)) {
-    def <- symbol_table$definitions[[name]]
+  # OPTIMIZATION: Use single lookup with NULL check instead of %in% + [[
+  # This avoids two hash lookups (one for %in%, one for [[)
+  def <- symbol_table$definitions[[name]]
+  if (!is.null(def)) {
     return(list(
       symbol_id = def$symbol_id,
       resolved_to = symbol_table$package_name,

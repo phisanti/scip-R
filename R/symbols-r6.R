@@ -64,199 +64,6 @@ extract_r6_symbols <- function(ast_module) {
   r6_classes
 }
 
-#' Visualize the parse tree surrounding an R6Class() call.
-#'
-#' Diagnostic helper that prints the ancestor chain for the selected R6Class()
-#' token and a grouped view of the expression subtree so we can inspect the
-#' exact parse_data structure that extract_members_r6() needs to handle.
-#'
-#' @param ast_module Parsed module list returned by `parse_file()`.
-#' @param which Integer index of the R6Class occurrence to inspect (defaults to 1).
-#' @param output_file Optional path; when NULL a file named
-#'   `r6_parse_tree_<which>.txt` is written to the current working directory.
-#' @param max_rows_per_token Maximum rows to print per token group.
-#' @return Invisibly returns a list containing the ancestor trace, subtree data,
-#'   and the output file path for further inspection.
-#' @keywords internal
-#' @examples
-#' \dontrun{
-#' ast <- parse_file(list(path = "check_r6.R", relative_path = "check_r6.R"))
-#' visualize_r6_parse_tree(ast)
-#' }
-visualize_r6_parse_tree <- function(ast_module,
-                                    which = 1,
-                                    output_file = NULL,
-                                    max_rows_per_token = 10) {
-  data <- ast_module$parse_data
-
-  if (is.null(data) || nrow(data) == 0) {
-    cli::cli_abort("No parse data available; did {.fn parse_file} run with {.code keep.source = TRUE}?")
-  }
-
-  r6_rows <- data[data$token == "SYMBOL_FUNCTION_CALL" & data$text == "R6Class", , drop = FALSE]
-  if (nrow(r6_rows) == 0) {
-    cli::cli_abort("No {.fn R6Class} calls found in this module.")
-  }
-
-  if (which < 1 || which > nrow(r6_rows)) {
-    cli::cli_abort("{.arg which} ({which}) must be between 1 and {nrow(r6_rows)}.")
-  }
-
-  call_row <- r6_rows[which, , drop = FALSE]
-
-  # Build ancestor trace starting from the R6Class token.
-  trace <- list()
-  current_id <- call_row$id[1]
-  level <- 1
-  seen_ids <- integer()
-
-  while (!is.na(current_id) && !(current_id %in% seen_ids)) {
-    node <- data[data$id == current_id, , drop = FALSE]
-    if (nrow(node) == 0) {
-      break
-    }
-
-    node$trace_level <- level
-    trace[[length(trace) + 1]] <- node
-    seen_ids <- c(seen_ids, current_id)
-
-    parent_id <- node$parent[1]
-    if (is.na(parent_id) || parent_id == 0) {
-      break
-    }
-
-    current_id <- parent_id
-    level <- level + 1
-  }
-
-  trace_df <- do.call(rbind, trace)
-
-  # Select the outermost expr ancestor to anchor the visualization.
-  expr_nodes <- trace_df[trace_df$token == "expr", , drop = FALSE]
-  if (nrow(expr_nodes) > 0) {
-    expr_nodes <- expr_nodes[order(expr_nodes$trace_level, decreasing = TRUE), , drop = FALSE]
-    call_expr <- expr_nodes[1, , drop = FALSE]
-  } else {
-    call_expr <- trace_df[nrow(trace_df), , drop = FALSE]
-  }
-
-  call_expr_id <- call_expr$id[1]
-  descendants <- get_descendants(call_expr_id, data)
-  call_expr_data <- call_expr[, colnames(data), drop = FALSE]
-
-  if (nrow(descendants) > 0) {
-    subtree <- rbind(call_expr_data, descendants)
-    subtree <- subtree[!duplicated(subtree$id), , drop = FALSE]
-  } else {
-    subtree <- call_expr_data
-  }
-
-  # Compute depth relative to the selected expression.
-  depth_map <- new.env(parent = emptyenv())
-  depth_map[[as.character(call_expr_id)]] <- 0L
-
-  compute_depth <- function(node_id) {
-    key <- as.character(node_id)
-    cached <- depth_map[[key]]
-    if (!is.null(cached)) {
-      return(cached)
-    }
-
-    row <- subtree[subtree$id == node_id, , drop = FALSE]
-    if (nrow(row) == 0) {
-      depth_map[[key]] <- 0L
-      return(0L)
-    }
-
-    parent_id <- row$parent[1]
-    if (is.na(parent_id) || !(parent_id %in% subtree$id)) {
-      depth_map[[key]] <- 0L
-      return(0L)
-    }
-
-    parent_depth <- compute_depth(parent_id)
-    depth_map[[key]] <- parent_depth + 1L
-    parent_depth + 1L
-  }
-
-  subtree$depth <- vapply(subtree$id, compute_depth, integer(1))
-
-  # Decide where to write the report.
-  if (is.null(output_file)) {
-    output_file <- file.path(getwd(), sprintf("r6_parse_tree_%d.txt", which))
-  }
-
-  con <- file(output_file, open = "wt")
-  on.exit(close(con), add = TRUE)
-
-  write_lines <- function(lines) {
-    writeLines(lines, con = con)
-  }
-
-  module_path <- ast_module$file_info$path %||% "<unknown file>"
-  write_lines(sprintf("R6Class Parse Tree Visualization (%s)\n", module_path))
-  write_lines(sprintf("Selected R6Class occurrence: %d of %d\n", which, nrow(r6_rows)))
-  write_lines("Ancestor trace (starting at R6Class token):")
-
-  trace_df <- trace_df[order(trace_df$trace_level), , drop = FALSE]
-  for (i in seq_len(nrow(trace_df))) {
-    row <- trace_df[i, ]
-    line <- sprintf(
-      "  L%-2d id=%-5s token=%-20s text='%s' parent=%s line=%s:%s",
-      row$trace_level,
-      row$id,
-      row$token,
-      ifelse(is.na(row$text), "", row$text),
-      ifelse(is.na(row$parent), "NA", row$parent),
-      ifelse(is.na(row$line1), "?", row$line1),
-      ifelse(is.na(row$col1), "?", row$col1)
-    )
-    write_lines(line)
-  }
-
-  write_lines("\nExpression subtree grouped by token:")
-
-  subtree <- subtree[order(subtree$token, subtree$line1, subtree$col1), , drop = FALSE]
-  token_groups <- split(subtree, subtree$token)
-  token_names <- names(token_groups)
-
-  for (token in token_names) {
-    group <- token_groups[[token]]
-    total_rows <- nrow(group)
-    write_lines(sprintf("\n[%s] (%d rows)", token, total_rows))
-
-    sample_rows <- head(group, max_rows_per_token)
-    for (i in seq_len(nrow(sample_rows))) {
-      row <- sample_rows[i, ]
-      indent <- paste0(strrep(" ", min(row$depth, 10) * 2))
-      line <- sprintf(
-        "%s- id=%-5s depth=%-2s line=%s:%s text='%s' parent=%s",
-        indent,
-        row$id,
-        row$depth,
-        ifelse(is.na(row$line1), "?", row$line1),
-        ifelse(is.na(row$col1), "?", row$col1),
-        ifelse(is.na(row$text), "", row$text),
-        ifelse(is.na(row$parent), "NA", row$parent)
-      )
-      write_lines(line)
-    }
-
-    if (total_rows > max_rows_per_token) {
-      write_lines(sprintf("  ... truncated %d rows ...", total_rows - max_rows_per_token))
-    }
-  }
-
-  write_lines("\nTip: Increase `max_rows_per_token` to dump full groups.")
-  cli::cli_alert_success("Parse tree visualization written to {.path {output_file}}")
-
-  invisible(list(
-    trace = trace_df,
-    subtree = subtree,
-    output = output_file
-  ))
-}
-
 #' Check if a function call is an R6Class invocation.
 #'
 #' Detects both R6::R6Class and R6Class patterns (after library(R6)).
@@ -431,15 +238,15 @@ extract_inherit_r6 <- function(descendants, data) {
   NULL
 }
 
-#' Extract member names from public/private/active lists.
+#' Extract member info from public/private/active lists.
 #'
 #' Parses 'public = list(...)', 'private = list(...)', or 'active = list(...)'
-#' to extract member names.
+#' to extract member names and whether each is a method or field.
 #'
 #' @param descendants Parse data subset of R6Class call.
 #' @param data Full parse data for context.
 #' @param member_type Character: "public", "private", or "active".
-#' @return Character vector of member names or NULL.
+#' @return List of member info (name, is_method) or NULL.
 #' @keywords internal
 extract_members_r6 <- function(descendants, data, member_type) {
   # Look for EQ_SUB token followed by member_type SYMBOL
@@ -481,9 +288,8 @@ extract_members_r6 <- function(descendants, data, member_type) {
         expr_right <- expr_right[order(expr_right$line1, expr_right$col1), , drop = FALSE]
         list_descendants <- get_descendants(expr_right$id[1], data)
 
-        # Extract SYMBOL names from the list (member names)
-        # These appear before = or as standalone elements
-        member_names <- character()
+        # Extract member info from the list (name + is_method)
+        members <- list()
 
         # Look for named list elements (name = value)
         eq_assign_rows <- list_descendants[list_descendants$token == "EQ_SUB", , drop = FALSE]
@@ -492,8 +298,10 @@ extract_members_r6 <- function(descendants, data, member_type) {
           eq_assign_row <- eq_assign_rows[j, ]
           eq_assign_parent <- eq_assign_row$parent
 
-          # Get left-hand side symbol
+          # Get siblings of this assignment
           eq_assign_siblings <- data[data$parent == eq_assign_parent, , drop = FALSE]
+
+          # Get left-hand side symbol (member name)
           lhs_mask <- eq_assign_siblings$token %in% c("SYMBOL", "SYMBOL_SUB")
           lhs_before <- eq_assign_siblings$line1 < eq_assign_row$line1 |
             (eq_assign_siblings$line1 == eq_assign_row$line1 &
@@ -502,12 +310,39 @@ extract_members_r6 <- function(descendants, data, member_type) {
 
           if (nrow(symbol_lhs) > 0) {
             symbol_lhs <- symbol_lhs[order(symbol_lhs$line1, symbol_lhs$col1), , drop = FALSE]
-            member_names <- c(member_names, symbol_lhs$text[nrow(symbol_lhs)])
+            member_name <- symbol_lhs$text[nrow(symbol_lhs)]
+
+            # Check if RHS contains a FUNCTION token (method vs field)
+            rhs_after <- eq_assign_siblings$line1 > eq_assign_row$line1 |
+              (eq_assign_siblings$line1 == eq_assign_row$line1 &
+                 eq_assign_siblings$col1 > eq_assign_row$col1)
+            rhs_expr <- eq_assign_siblings[eq_assign_siblings$token == "expr" & rhs_after, , drop = FALSE]
+
+            is_method <- FALSE
+            if (nrow(rhs_expr) > 0) {
+              rhs_expr <- rhs_expr[order(rhs_expr$line1, rhs_expr$col1), , drop = FALSE]
+              rhs_descendants <- get_descendants(rhs_expr$id[1], data)
+              is_method <- any(rhs_descendants$token == "FUNCTION")
+            }
+
+            members[[length(members) + 1]] <- list(
+              name = member_name,
+              is_method = is_method
+            )
           }
         }
 
-        if (length(member_names) > 0) {
-          return(unique(member_names))
+        if (length(members) > 0) {
+          # Remove duplicates by name, keeping first occurrence
+          seen <- character()
+          unique_members <- list()
+          for (m in members) {
+            if (!(m$name %in% seen)) {
+              seen <- c(seen, m$name)
+              unique_members[[length(unique_members) + 1]] <- m
+            }
+          }
+          return(unique_members)
         }
       }
     }
@@ -553,45 +388,53 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
       documentation = NULL
     )
     
-    # Process public members
+    # Process public members (list of {name, is_method} info)
     if (!is.null(class_info$public_members) && length(class_info$public_members) > 0) {
-      for (member_name in class_info$public_members) {
-        # Determine if it's a method or field based on naming
+      for (member_info in class_info$public_members) {
+        member_name <- member_info$name
+        is_method <- member_info$is_method
+
+        # Determine kind and suffix based on is_method flag
         if (member_name == "initialize") {
           kind <- "r6_constructor"
           suffix <- "()."
-        } else {
-          # Default to method (most common case)
+        } else if (is_method) {
           kind <- "r6_method"
           suffix <- "()."
-        }
-        
-        member_symbol <- paste0(class_symbol, "#", member_name, suffix)
-        
-        symbols[[length(symbols) + 1]] <- list(
-          symbol = member_symbol,
-          display_name = member_name,
-          kind = kind,
-          documentation = NULL,
-          enclosing_symbol = class_symbol
-        )
-      }
-    }
-    
-    # Process private members
-    if (!is.null(class_info$private_members) && length(class_info$private_members) > 0) {
-      for (member_name in class_info$private_members) {
-        # Private members that start with . are typically fields
-        if (startsWith(member_name, ".")) {
+        } else {
           kind <- "r6_field"
           suffix <- "."
-        } else {
+        }
+
+        member_symbol <- paste0(class_symbol, "#", member_name, suffix)
+
+        symbols[[length(symbols) + 1]] <- list(
+          symbol = member_symbol,
+          display_name = member_name,
+          kind = kind,
+          documentation = NULL,
+          enclosing_symbol = class_symbol
+        )
+      }
+    }
+
+    # Process private members (list of {name, is_method} info)
+    if (!is.null(class_info$private_members) && length(class_info$private_members) > 0) {
+      for (member_info in class_info$private_members) {
+        member_name <- member_info$name
+        is_method <- member_info$is_method
+
+        # Use is_method flag to determine kind
+        if (is_method) {
           kind <- "r6_method"
           suffix <- "()."
+        } else {
+          kind <- "r6_field"
+          suffix <- "."
         }
-        
+
         member_symbol <- paste0(class_symbol, "#", member_name, suffix)
-        
+
         symbols[[length(symbols) + 1]] <- list(
           symbol = member_symbol,
           display_name = member_name,
@@ -602,11 +445,12 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
       }
     }
     
-    # Process active bindings (treat as properties)
+    # Process active bindings (list of {name, is_method} info, treat as properties)
     if (!is.null(class_info$active_members) && length(class_info$active_members) > 0) {
-      for (member_name in class_info$active_members) {
+      for (member_info in class_info$active_members) {
+        member_name <- member_info$name
         member_symbol <- paste0(class_symbol, "#", member_name, ".")
-        
+
         symbols[[length(symbols) + 1]] <- list(
           symbol = member_symbol,
           display_name = member_name,
