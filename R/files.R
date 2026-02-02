@@ -26,22 +26,26 @@ discover_files <- function(workspace, cache_enabled = FALSE) {
   previous_state <- if (cache_enabled) load_cache_state(state_path) else list()
   current_state <- list()
 
-  all_files <- list.files(root, pattern = "\\.R$", recursive = TRUE, full.names = TRUE)
-  if (length(all_files) == 0) {
+  # Use full.names = FALSE to get relative paths first, avoiding symlink resolution
+
+  # issues with renv library symlinks that point outside the project root.
+  all_relative <- list.files(root, pattern = "\\.R$", recursive = TRUE, full.names = FALSE)
+  if (length(all_relative) == 0) {
     return(list(
       files = list(),
       cache = cache_summary(cache_enabled, state_path, previous_state, current_state)
     ))
   }
 
-  all_files <- sort(all_files)
+  all_relative <- sort(all_relative)
 
   files <- list()
-  for (path in all_files) {
-    relative <- rel_path(path, root)
+  for (relative in all_relative) {
     if (matches_ignore(relative, ignore)) {
       next
     }
+    # Construct full path after filtering
+    path <- file.path(root, relative)
 
     hash <- digest_file(path)
     file_info <- file.info(path)
@@ -130,13 +134,28 @@ matches_ignore <- function(path, ignore) {
 
     if (isTRUE(rule$dir_only)) {
       if (identical(scope, "component")) {
+        # For component scope, exclude the filename (last component)
         if (length(candidates) <= 1) {
           candidates <- character()
         } else {
           candidates <- candidates[-length(candidates)]
         }
       } else if (identical(scope, "suffix")) {
+        # For suffix scope with dir_only, we need to match directory prefixes
+        # e.g., "renv/library/" should match "renv/library/pkg/R/file.R"
+        # Extract directory prefixes from the path for matching
         candidates <- candidates[grepl("/", candidates, fixed = TRUE)]
+        # Also add prefix-based candidates: extract the directory portion
+        # that could match the pattern
+        dir_prefixes <- character()
+        for (cand in candidates) {
+          # Split and rebuild prefixes of increasing length
+          parts <- strsplit(cand, "/", fixed = TRUE)[[1]]
+          for (j in seq_along(parts)[-length(parts)]) {
+            dir_prefixes <- c(dir_prefixes, paste(parts[1:j], collapse = "/"))
+          }
+        }
+        candidates <- unique(c(candidates, dir_prefixes))
       } else if (identical(scope, "path") && !grepl("/", path, fixed = TRUE)) {
         candidates <- character()
       }
