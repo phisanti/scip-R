@@ -1,21 +1,36 @@
 NULL
 
-# This script inspects R workspaces to build metadata for SCIP indexing.
-# It derives project identity, dependency context, and file inclusion rules.
-# Future implementations should enrich detection for diverse package layouts.
+# =============================================================================
+# Workspace Analysis Module
+# =============================================================================
+#
+# This module inspects R project workspaces to extract metadata, dependencies,
+# and file exclusion rules for SCIP indexing. It serves as the foundation for
+# understanding project structure before file discovery begins.
+#
+# Supported project types:
+#   - Standard R packages (DESCRIPTION file)
+#   - renv-managed projects (renv.lock)
+#   - packrat-managed projects (packrat.lock)
+#   - Generic R projects (directory of .R files)
+#
+# =============================================================================
 
 #' Analyze workspace metadata and dependencies.
 #'
+#' Inspects the project root to determine project identity, version, external
+#' dependencies, and file exclusion rules from `.gitignore` and `.Rbuildignore`.
+#'
 #' @param root Character path to the project root directory.
-#' @param namespace Optional symbol namespace prefix to prepend to emitted symbols.
-#' @return A list containing metadata, dependencies, normalized root URI, and ignore patterns.
+#' @param namespace Optional symbol namespace prefix for emitted SCIP symbols.
+#' @return A list containing:
+#'   - `metadata`: project_root, project_uri, project_name, project_version, namespace
+#'   - `dependencies`: named character vector of package -> version mappings
+#'   - `ignore`: list of ignore rules for file discovery
 #' @keywords internal
-#' @examples
-#' \dontrun{
-#' analyze_workspace(tempdir())
-#' }
 analyze_workspace <- function(root, namespace = NULL) {
   root <- normalizePath(root, winslash = "/", mustWork = FALSE)
+
   metadata <- list(
     project_root = root,
     project_uri = paste0("file://", root),
@@ -24,143 +39,161 @@ analyze_workspace <- function(root, namespace = NULL) {
     namespace = namespace
   )
 
-  dependencies <- detect_dependencies(root)
-  ignore <- detect_ignore_globs(root)
-
   list(
     metadata = metadata,
-    dependencies = dependencies,
-    ignore = ignore
+    dependencies = detect_dependencies(root),
+    ignore = detect_ignore_rules(root)
   )
 }
 
-#' Detect project version from DESCRIPTION or fallback.
+# =============================================================================
+# Project Metadata Detection
+# =============================================================================
+
+#' Detect project version from DESCRIPTION.
 #'
 #' @param root Project root path.
-#' @return Character version string.
+#' @return Version string, or "0.0.0-dev" if not found.
 #' @keywords internal
 detect_project_version <- function(root) {
   desc_path <- file.path(root, "DESCRIPTION")
-  if (file.exists(desc_path)) {
-    lines <- readLines(desc_path, warn = FALSE)
-    version_line <- lines[grepl("^Version:", lines)]
-    if (length(version_line) > 0) {
-      value <- sub("^Version:[[:space:]]*", "", version_line[[1]])
-      return(trimws(value))
-    }
+
+  if (!file.exists(desc_path)) {
+    return("0.0.0-dev")
   }
-  "0.0.0-dev"
+
+  lines <- readLines(desc_path, warn = FALSE)
+  version_line <- lines[grepl("^Version:", lines)]
+
+  if (length(version_line) == 0) {
+    return("0.0.0-dev")
+  }
+
+  trimws(sub("^Version:[[:space:]]*", "", version_line[[1]]))
 }
 
-#' Detect external dependencies from lockfiles and DESCRIPTION.
+#' Detect external dependencies from DESCRIPTION and lockfiles.
+#'
+#' Parses DESCRIPTION for Imports/Depends/Suggests, and renv.lock or
+#' packrat.lock for pinned versions.
 #'
 #' @param root Project root path.
-#' @return A named character vector mapping package names to versions when known.
+#' @return Named character vector: package names -> versions (NA if unknown).
 #' @keywords internal
 detect_dependencies <- function(root) {
   deps <- character()
+
+  # Parse DESCRIPTION
   desc_path <- file.path(root, "DESCRIPTION")
   if (file.exists(desc_path)) {
     lines <- readLines(desc_path, warn = FALSE)
-    imports <- lines[grepl("^(Imports|Depends|Suggests):", lines)]
-    if (length(imports) > 0) {
-      pkg_line <- paste(imports, collapse = " ")
-      pkgs <- unlist(strsplit(pkg_line, "[,()[:space:]]"))
+    dep_lines <- lines[grepl("^(Imports|Depends|Suggests):", lines)]
+
+    if (length(dep_lines) > 0) {
+      combined <- paste(dep_lines, collapse = " ")
+      pkgs <- unlist(strsplit(combined, "[,()[:space:]]"))
       pkgs <- trimws(pkgs)
-      pkgs <- pkgs[nzchar(pkgs) & !grepl("^Imports|Depends|Suggests", pkgs)]
+      pkgs <- pkgs[nzchar(pkgs) & !grepl("^(Imports|Depends|Suggests)", pkgs)]
       deps[pkgs] <- NA_character_
     }
   }
 
-  lockfiles <- c("renv.lock", "packrat.lock")
-  for (lockfile in lockfiles) {
-    path <- file.path(root, lockfile)
-    if (file.exists(path)) {
-      lock_data <- readLines(path, warn = FALSE)
-      pkg_lines <- lock_data[grepl("\"Package\"", lock_data)]
-      ver_lines <- lock_data[grepl("\"Version\"", lock_data)]
-      if (length(pkg_lines) == length(ver_lines)) {
-        pkgs <- trimws(sub('.*"Package"[[:space:]]*:[[:space:]]*"(.*?)".*', "\\1", pkg_lines))
-        vers <- trimws(sub('.*"Version"[[:space:]]*:[[:space:]]*"(.*?)".*', "\\1", ver_lines))
-        deps[pkgs] <- vers
-      }
+  # Parse lockfiles for version information
+  for (lockfile in c("renv.lock", "packrat.lock")) {
+    lock_path <- file.path(root, lockfile)
+    if (!file.exists(lock_path)) next
+
+    lock_data <- readLines(lock_path, warn = FALSE)
+    pkg_lines <- lock_data[grepl("\"Package\"", lock_data)]
+    ver_lines <- lock_data[grepl("\"Version\"", lock_data)]
+
+    if (length(pkg_lines) == length(ver_lines)) {
+      pkgs <- trimws(sub('.*"Package"[[:space:]]*:[[:space:]]*"(.*?)".*', "\\1", pkg_lines))
+      vers <- trimws(sub('.*"Version"[[:space:]]*:[[:space:]]*"(.*?)".*', "\\1", ver_lines))
+      deps[pkgs] <- vers
     }
   }
+
   deps
 }
 
-#' Detect ignore globs from project files.
+# =============================================================================
+# Ignore Rule Detection
+# =============================================================================
+
+#' Detect file exclusion rules from project configuration.
+#'
+#' Combines built-in exclusions, .Rbuildignore patterns (as regex), and
+#' .gitignore patterns (parsed as gitignore syntax) into a unified rule set.
 #'
 #' @param root Project root path.
-#' @return Character vector of glob patterns to exclude from discovery.
+#' @return List of ignore rules for use with `matches_ignore()`.
 #' @keywords internal
-detect_ignore_globs <- function(root) {
+detect_ignore_rules <- function(root) {
   rules <- list()
 
-  # Default directories that should never be indexed
-  default_patterns <- c(".git/", ".Rproj.user/", ".renv/")
-  rules <- c(rules, parse_gitignore_lines(default_patterns))
+  # Built-in exclusions: directories that should never be indexed
+  builtin_patterns <- c(".git/", ".Rproj.user/", ".renv/")
+  rules <- c(rules, parse_gitignore_lines(builtin_patterns))
 
+  # .Rbuildignore: regex patterns matched against full path
   build_ignore <- file.path(root, ".Rbuildignore")
   if (file.exists(build_ignore)) {
-    build_patterns <- read_ignore_file(build_ignore)
-    if (length(build_patterns) > 0) {
-      for (pattern in build_patterns) {
-        rules[[length(rules) + 1]] <- list(
-          regex = pattern,
-          negate = FALSE,
-          scope = "path",
-          raw = sprintf(".Rbuildignore:%s", pattern)
-        )
-      }
+    patterns <- read_ignore_file(build_ignore, strip_comments = TRUE)
+    for (pattern in patterns) {
+      rules[[length(rules) + 1]] <- list(
+        regex = pattern,
+        negate = FALSE,
+        scope = "path",
+        raw = paste0(".Rbuildignore:", pattern)
+      )
     }
   }
 
+  # .gitignore: parsed using gitignore semantics
   git_ignore <- file.path(root, ".gitignore")
   if (file.exists(git_ignore)) {
-    git_patterns <- read_ignore_file(git_ignore, allow_comments = TRUE)
-    rules <- c(rules, parse_gitignore_lines(git_patterns))
+    patterns <- read_ignore_file(git_ignore, strip_comments = FALSE)
+    rules <- c(rules, parse_gitignore_lines(patterns))
   }
 
   rules
 }
 
-#' Read ignore file lines trimming whitespace and comments.
+# =============================================================================
+# Gitignore Parsing
+# =============================================================================
+
+#' Read and clean lines from an ignore file.
 #'
 #' @param path File path to read.
-#' @param allow_comments Logical; when TRUE keep escaped comment markers.
-#' @return Character vector of cleaned lines.
+#' @param strip_comments If TRUE, remove lines starting with #.
+#' @return Character vector of non-empty lines.
 #' @keywords internal
-read_ignore_file <- function(path, allow_comments = FALSE) {
+read_ignore_file <- function(path, strip_comments = TRUE) {
   lines <- readLines(path, warn = FALSE)
-  if (length(lines) == 0) {
-    return(character())
-  }
+  if (length(lines) == 0) return(character())
 
   cleaned <- character()
   for (line in lines) {
-    line <- sub("\r$", "", line, perl = TRUE) # Handle CRLF
-    trimmed <- trimws(line, which = "right")
-    if (!allow_comments && startsWith(trimmed, "#")) {
-      next
-    }
-    if (!nzchar(trimmed)) {
-      next
-    }
-    cleaned <- c(cleaned, trimmed)
+    line <- sub("\r$", "", line, perl = TRUE)
+    line <- trimws(line, which = "right")
+
+    if (strip_comments && startsWith(line, "#")) next
+    if (!nzchar(line)) next
+
+    cleaned <- c(cleaned, line)
   }
   cleaned
 }
 
-#' Parse gitignore-style lines into matcher rules.
+#' Parse gitignore lines into structured rules.
 #'
 #' @param lines Character vector of gitignore entries.
-#' @return List of ignore rules compatible with matches_ignore().
+#' @return List of rule objects compatible with `matches_ignore()`.
 #' @keywords internal
 parse_gitignore_lines <- function(lines) {
-  if (length(lines) == 0) {
-    return(list())
-  }
+  if (length(lines) == 0) return(list())
 
   rules <- list()
   for (line in lines) {
@@ -174,32 +207,33 @@ parse_gitignore_lines <- function(lines) {
 
 #' Parse a single gitignore line into a rule.
 #'
-#' Best-effort subset of gitignore semantics: supports comments, negation,
-#' absolute vs relative matches, directory-only entries, and glob wildcards.
+#' Implements a subset of gitignore semantics:
+#'   - Comments (#) and blank lines are ignored
+#'   - Negation prefix (!) un-ignores previously matched paths
+#'   - Leading slash (/) anchors pattern to project root
+#'   - Trailing slash (/) matches only directories
+#'   - Glob wildcards (*, ?, []) are converted to regex
 #'
 #' @param line Single line from a gitignore file.
-#' @return List describing the rule, or NULL if line is ignored.
+#' @return Rule list with regex, negate, scope, dir_only, raw; or NULL.
 #' @keywords internal
 parse_gitignore_line <- function(line) {
-  if (is.null(line)) {
-    return(NULL)
-  }
+  if (is.null(line)) return(NULL)
 
   original <- line
   line <- sub("\r$", "", line, perl = TRUE)
   line <- trimws(line, which = "right")
-  if (!nzchar(line)) {
-    return(NULL)
-  }
 
-  # Handle escaped comment markers
+  if (!nzchar(line)) return(NULL)
+
+  # Handle comments (escaped or not)
   if (startsWith(line, "\\#")) {
     line <- substring(line, 2)
   } else if (startsWith(line, "#")) {
     return(NULL)
   }
 
-  # Handle escaped negation
+  # Handle negation
   if (startsWith(line, "\\!")) {
     line <- substring(line, 2)
   }
@@ -210,14 +244,14 @@ parse_gitignore_line <- function(line) {
     line <- substring(line, 2)
   }
 
+  # Unescape special characters
   line <- gsub("\\\\ ", " ", line, perl = TRUE)
   line <- gsub("\\\\#", "#", line, perl = TRUE)
   line <- gsub("\\\\!", "!", line, perl = TRUE)
 
-  if (!nzchar(line)) {
-    return(NULL)
-  }
+  if (!nzchar(line)) return(NULL)
 
+  # Determine matching behavior
   anchored <- startsWith(line, "/")
   pattern <- sub("^/", "", line)
   dir_only <- endsWith(pattern, "/")
@@ -225,15 +259,18 @@ parse_gitignore_line <- function(line) {
   has_slash <- grepl("/", pattern, fixed = TRUE)
 
   regex <- glob_to_regex(pattern)
-  if (!nzchar(regex)) {
-    return(NULL)
-  }
+  if (!nzchar(regex)) return(NULL)
 
-  scope <- "component"
-  if (anchored) {
-    scope <- "path"
+  # Scope determines how pattern is matched:
+  #   - "path": match against full relative path (anchored patterns)
+  #   - "suffix": match against trailing path segments (patterns with /)
+  #   - "component": match against individual path segments (simple patterns)
+  scope <- if (anchored) {
+    "path"
   } else if (has_slash) {
-    scope <- "suffix"
+    "suffix"
+  } else {
+    "component"
   }
 
   list(
@@ -245,18 +282,15 @@ parse_gitignore_line <- function(line) {
   )
 }
 
-#' Convert a shell glob to a regular expression.
+#' Convert a shell glob pattern to a regular expression.
 #'
-#' Uses utils::glob2rx to convert glob patterns to anchored regular expressions.
-#' Anchors are preserved to ensure patterns like `*_` correctly match only
-#' strings ending with underscore, not strings containing underscore anywhere.
-#'
-#' @param pattern Glob pattern without leading slash trimming.
-#' @return Regular expression string with anchors preserved.
+#' @param pattern Glob pattern (e.g., "*.R", "test_*").
+#' @return Anchored regular expression string.
 #' @keywords internal
 glob_to_regex <- function(pattern) {
-  if (!nzchar(pattern)) {
-    return("^.*$")
-  }
+  if (!nzchar(pattern)) return("^.*$")
   utils::glob2rx(pattern, trim.head = FALSE, trim.tail = FALSE)
 }
+
+# Legacy alias for backwards compatibility
+detect_ignore_globs <- detect_ignore_rules

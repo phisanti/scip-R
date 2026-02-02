@@ -2,23 +2,34 @@
 #' @include workspace.R
 NULL
 
-# This script manages file discovery and change planning for scip-r runs.
-# It enumerates source files, applies ignore rules, and prepares indexing queues.
-# Future iterations should enhance caching and incremental decision logic.
+# =============================================================================
+# File Discovery Module
+# =============================================================================
+#
+# This module enumerates R source files for indexing, applying ignore rules
+# from .gitignore, .Rbuildignore, and built-in exclusions. It also manages
+# an optional file hash cache for incremental indexing.
+#
+# Key design decisions:
+#   - Relative paths are computed BEFORE filtering to handle renv symlinks
+#     that resolve outside the project root (e.g., to ~/.cache/R/renv/...)
+#   - Gitignore semantics are approximated with three matching scopes:
+#     component (filename), suffix (trailing path segments), and path (full)
+#   - Directory patterns (trailing /) match any file beneath that directory
+#
+# =============================================================================
 
 #' Discover source files for indexing.
 #'
-#' Applies workspace ignore rules, computes file hashes, and optionally tracks
-#' a cache manifest to skip unchanged files on subsequent runs.
+#' Enumerates all `.R` files under the project root, filters out ignored paths
+#' using rules from `.gitignore` and `.Rbuildignore`, computes file hashes,
+#' and optionally maintains a cache manifest for incremental indexing.
 #'
 #' @param workspace Workspace list produced by `analyze_workspace()`.
-#' @param cache_enabled Logical flag enabling cache hints and manifest writes.
-#' @return A list containing discovered files and cache metadata.
+#' @param cache_enabled Logical; when TRUE, loads/saves a manifest to skip
+#'   unchanged files on subsequent runs.
+#' @return A list with `files` (list of file descriptors) and `cache` (status).
 #' @keywords internal
-#' @examples
-#' \dontrun{
-#' discover_files(list(metadata = list(project_root = tempdir()), ignore = character()))
-#' }
 discover_files <- function(workspace, cache_enabled = FALSE) {
   root <- workspace$metadata$project_root
   ignore <- workspace$ignore %||% list()
@@ -26,10 +37,18 @@ discover_files <- function(workspace, cache_enabled = FALSE) {
   previous_state <- if (cache_enabled) load_cache_state(state_path) else list()
   current_state <- list()
 
-  # Use full.names = FALSE to get relative paths first, avoiding symlink resolution
+  # Enumerate files using relative paths to avoid symlink resolution issues.
+  # renv creates symlinks in renv/library/ pointing to a global cache outside
 
-  # issues with renv library symlinks that point outside the project root.
-  all_relative <- list.files(root, pattern = "\\.R$", recursive = TRUE, full.names = FALSE)
+  # the project; using full.names=TRUE would resolve these, causing gitignore
+  # patterns like "renv/library/" to fail matching.
+  all_relative <- list.files(
+    root,
+    pattern = "\\.R$",
+    recursive = TRUE,
+    full.names = FALSE
+  )
+
   if (length(all_relative) == 0) {
     return(list(
       files = list(),
@@ -38,17 +57,17 @@ discover_files <- function(workspace, cache_enabled = FALSE) {
   }
 
   all_relative <- sort(all_relative)
-
   files <- list()
+
   for (relative in all_relative) {
     if (matches_ignore(relative, ignore)) {
       next
     }
-    # Construct full path after filtering
-    path <- file.path(root, relative)
 
+    path <- file.path(root, relative)
     hash <- digest_file(path)
-    file_info <- file.info(path)
+    info <- file.info(path)
+
     needs_index <- TRUE
     if (cache_enabled && length(previous_state) > 0) {
       prev <- previous_state[[relative]]
@@ -59,15 +78,15 @@ discover_files <- function(workspace, cache_enabled = FALSE) {
       path = path,
       relative_path = relative,
       hash = hash,
-      size = file_info$size,
-      mtime = unname(file_info$mtime),
+      size = info$size,
+      mtime = unname(info$mtime),
       needs_index = needs_index
     )
 
     current_state[[relative]] <- list(
       hash = hash,
-      size = file_info$size,
-      mtime = unname(file_info$mtime)
+      size = info$size,
+      mtime = unname(info$mtime)
     )
   }
 
@@ -81,21 +100,31 @@ discover_files <- function(workspace, cache_enabled = FALSE) {
   )
 }
 
-#' Check if path matches ignore rules.
+# =============================================================================
+# Ignore Pattern Matching
+# =============================================================================
+
+#' Test whether a path matches any ignore rule.
 #'
-#' @param path File path to evaluate.
-#' @param ignore Character vector of ignore patterns.
-#' @return Logical indicating whether the path should be ignored.
+#' Evaluates rules in order, tracking ignored/negated state. Supports three
+#' matching scopes: component (individual path segments), suffix (trailing
+#' path portions), and path (full relative path). Directory-only patterns
+#' match files anywhere beneath the specified directory.
+#'
+#' @param path Relative file path using forward slashes.
+#' @param ignore List of ignore rules from `detect_ignore_globs()`.
+#' @return TRUE if the path should be ignored, FALSE otherwise.
 #' @keywords internal
 matches_ignore <- function(path, ignore) {
   if (length(ignore) == 0) {
     return(FALSE)
   }
 
-  # Backwards compatibility for character vectors
-  if (is.character(ignore)) {
-    return(any(vapply(ignore, function(pattern) {
-      nzchar(pattern) && grepl(pattern, path, perl = TRUE)
+  # Legacy support for simple regex character vectors
+
+if (is.character(ignore)) {
+    return(any(vapply(ignore, function(pat) {
+      nzchar(pat) && grepl(pat, path, perl = TRUE)
     }, logical(1))))
   }
 
@@ -103,14 +132,17 @@ matches_ignore <- function(path, ignore) {
   if (length(components) == 0) {
     components <- path
   }
+
+  # Lazy-compute suffix and prefix variants only when needed
   suffixes <- NULL
+  dir_prefixes <- NULL
 
   ignored <- FALSE
-  for (rule in ignore) {
-    if (is.null(rule)) {
-      next
-    }
 
+  for (rule in ignore) {
+    if (is.null(rule)) next
+
+    # Legacy: bare regex string
     if (is.character(rule)) {
       if (grepl(rule, path, perl = TRUE)) {
         ignored <- TRUE
@@ -119,137 +151,157 @@ matches_ignore <- function(path, ignore) {
     }
 
     scope <- rule$scope %||% "path"
+    dir_only <- isTRUE(rule$dir_only)
+
+    # Select candidates based on scope
     candidates <- switch(
       scope,
-      component = components,
+      component = {
+        if (dir_only) {
+          # Exclude filename for directory patterns
+          if (length(components) > 1) components[-length(components)] else character()
+        } else {
+          components
+        }
+      },
       suffix = {
         if (is.null(suffixes)) {
           suffixes <- build_path_suffixes(components)
         }
-        suffixes
+        if (dir_only) {
+          # For directory patterns, also match directory prefixes
+          # e.g., "renv/library/" should match "renv/library/pkg/R/file.R"
+          if (is.null(dir_prefixes)) {
+            dir_prefixes <- build_dir_prefixes(components)
+          }
+          unique(c(suffixes[grepl("/", suffixes, fixed = TRUE)], dir_prefixes))
+        } else {
+          suffixes
+        }
       },
-      path = path,
+      path = {
+        if (dir_only && !grepl("/", path, fixed = TRUE)) {
+          character()
+        } else {
+          path
+        }
+      },
       path
     )
 
-    if (isTRUE(rule$dir_only)) {
-      if (identical(scope, "component")) {
-        # For component scope, exclude the filename (last component)
-        if (length(candidates) <= 1) {
-          candidates <- character()
-        } else {
-          candidates <- candidates[-length(candidates)]
-        }
-      } else if (identical(scope, "suffix")) {
-        # For suffix scope with dir_only, we need to match directory prefixes
-        # e.g., "renv/library/" should match "renv/library/pkg/R/file.R"
-        # Extract directory prefixes from the path for matching
-        candidates <- candidates[grepl("/", candidates, fixed = TRUE)]
-        # Also add prefix-based candidates: extract the directory portion
-        # that could match the pattern
-        dir_prefixes <- character()
-        for (cand in candidates) {
-          # Split and rebuild prefixes of increasing length
-          parts <- strsplit(cand, "/", fixed = TRUE)[[1]]
-          for (j in seq_along(parts)[-length(parts)]) {
-            dir_prefixes <- c(dir_prefixes, paste(parts[1:j], collapse = "/"))
-          }
-        }
-        candidates <- unique(c(candidates, dir_prefixes))
-      } else if (identical(scope, "path") && !grepl("/", path, fixed = TRUE)) {
-        candidates <- character()
-      }
-    }
+    if (length(candidates) == 0) next
 
-    if (length(candidates) == 0) {
-      next
-    }
-
-    matched <- any(vapply(candidates, function(candidate) {
-      nzchar(candidate) && grepl(rule$regex, candidate, perl = TRUE)
+    matched <- any(vapply(candidates, function(cand) {
+      nzchar(cand) && grepl(rule$regex, cand, perl = TRUE)
     }, logical(1)))
 
     if (matched) {
-      if (isTRUE(rule$negate)) {
-        ignored <- FALSE
-      } else {
-        ignored <- TRUE
-      }
+      ignored <- !isTRUE(rule$negate)
     }
   }
 
   ignored
 }
 
-#' Relative path helper.
+#' Build suffix variants of a path (trailing segments).
+#'
+#' For path "a/b/c/file.R", returns:
+#'   c("a/b/c/file.R", "b/c/file.R", "c/file.R", "file.R")
+#'
+#' @param components Character vector of path segments.
+#' @return Character vector of path suffixes.
+#' @keywords internal
+build_path_suffixes <- function(components) {
+  n <- length(components)
+  if (n == 0) return(character())
+
+  vapply(seq_len(n), function(i) {
+    paste(components[i:n], collapse = "/")
+  }, character(1))
+}
+
+#' Build directory prefix variants of a path.
+#'
+#' For path "a/b/c/file.R", returns: c("a", "a/b", "a/b/c")
+#' Used for matching directory-only patterns like "a/b/".
+#'
+#' @param components Character vector of path segments.
+#' @return Character vector of directory prefixes (excludes filename).
+#' @keywords internal
+build_dir_prefixes <- function(components) {
+  n <- length(components)
+  if (n <= 1) return(character())
+
+  # Exclude the filename (last component)
+  dir_parts <- components[-n]
+  vapply(seq_along(dir_parts), function(i) {
+    paste(dir_parts[1:i], collapse = "/")
+  }, character(1))
+}
+
+# =============================================================================
+# Path Utilities
+# =============================================================================
+
+#' Compute relative path from root.
 #'
 #' @param path Absolute file path.
-#' @param root Workspace root.
+#' @param root Workspace root directory.
 #' @return Relative path with forward slashes.
 #' @keywords internal
 rel_path <- function(path, root) {
   path <- normalizePath(path, winslash = "/", mustWork = FALSE)
   root <- normalizePath(root, winslash = "/", mustWork = FALSE)
   prefix <- paste0(root, "/")
+
   if (startsWith(path, prefix)) {
-    rel <- substring(path, nchar(prefix) + 1L)
+    substring(path, nchar(prefix) + 1L)
   } else {
-    rel <- path
+    gsub("\\\\", "/", path)
   }
-  gsub("\\\\", "/", rel)
 }
 
-#' Digest helper using MD5 hash when available.
+#' Compute MD5 hash of a file.
+#'
+#' Falls back to size+mtime fingerprint if digest package unavailable.
 #'
 #' @param path File path.
-#' @return MD5 hash string or NA if hashing fails.
+#' @return Hash string or NA if file doesn't exist.
 #' @keywords internal
 digest_file <- function(path) {
   if (!file.exists(path)) {
     return(NA_character_)
   }
+
   if (requireNamespace("digest", quietly = TRUE)) {
     return(digest::digest(file = path, algo = "md5"))
   }
+
   info <- file.info(path)
   paste(info$size, as.numeric(info$mtime), sep = "-")
 }
 
-#' Build suffix variants for a relative path.
-#'
-#' @param components Character vector of path components.
-#' @return Character vector of suffixes joining trailing components.
-#' @keywords internal
-build_path_suffixes <- function(components) {
-  n <- length(components)
-  if (n == 0) {
-    return(character())
-  }
-  suffixes <- character(n)
-  for (i in seq_len(n)) {
-    suffixes[i] <- paste(components[i:n], collapse = "/")
-  }
-  suffixes
-}
+# =============================================================================
+# Cache Management
+# =============================================================================
 
-#' Load cached manifest state.
+#' Load cached file state from disk.
 #'
-#' @param state_path RDS path storing file hashes.
-#' @return Named list of cached entries.
+#' @param state_path Path to the RDS manifest file.
+#' @return Named list of file metadata, or empty list if unavailable.
 #' @keywords internal
 load_cache_state <- function(state_path) {
   if (!file.exists(state_path)) {
     return(list())
   }
+
   tryCatch({
     state <- readRDS(state_path)
     if (is.list(state)) state else list()
-  }, error = function(e) {
-    list()
-  })
+  }, error = function(e) list())
 }
 
-#' Persist cache manifest state.
+#' Save file state cache to disk.
 #'
 #' @param state_path Destination RDS path.
 #' @param state Named list of file metadata.
@@ -264,8 +316,8 @@ save_cache_state <- function(state_path, state) {
 
 #' Summarize cache status for discover_files output.
 #'
-#' @param enabled Logical flag.
-#' @param state_path Manifest location.
+#' @param enabled Whether caching is enabled.
+#' @param state_path Manifest file location.
 #' @param previous_state Previously loaded entries.
 #' @param current_state Newly computed entries.
 #' @return List describing cache state.
