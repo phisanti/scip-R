@@ -5,24 +5,27 @@
 #| launcher:
 #|   no-init-file: true
 
-# ============================================================================
-# PRIMARY CLI ENTRYPOINT for scipR
-# ============================================================================
-# This is the main command-line interface for scip-r, powered by Rapp.
+# =============================================================================
+# scip-r CLI
+# =============================================================================
 #
-# Rapp's hash-pipe annotations (#|) automatically provide:
-# - Command-line argument parsing with type validation
-# - Help text generation (--help)
-# - Version information (--version)
-# - Boolean flags (--cache/--no-cache)
-# - Default value handling
+# Generate SCIP (Source Code Intelligence Protocol) indexes for R projects.
+# SCIP indexes enable code intelligence features like go-to-definition and
+# find-references in tools like Sourcegraph.
 #
-# This script constructs a configuration object and calls the orchestration
-# layer directly, avoiding the double-parsing overhead of the deprecated
-# run_cli() approach.
+# Usage examples:
+#   scip-r --root=. --output=index.scip
+#   scip-r --include "R/*.R" --include "tests/**/*.R" --output=index.scip
+#   scip-r --root=/path/to/project --parallel=4 --output=index.scip
 #
-# For more information on Rapp syntax, see: https://github.com/r-lib/Rapp
-# ============================================================================
+# Rapp's hash-pipe annotations (#|) provide automatic CLI parsing.
+# For more information: https://github.com/r-lib/Rapp
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# CLI Arguments
+# -----------------------------------------------------------------------------
 
 #| description: Project root directory to index
 root <- "."
@@ -30,47 +33,53 @@ root <- "."
 #| description: Output file path for the SCIP index
 output <- "index.scip"
 
-#| description: Optional namespace prefix for local symbols
-namespace <- ""
-
-#| description: Override project name in metadata
-project_name <- ""
-
-#| description: Enable file discovery cache
-cache <- FALSE
-
-#| description: Number of parallel workers (0 for sequential)
-parallel <- 0L
-
-#| description: Glob patterns to include (repeatable). Only files matching at least one pattern are indexed.
+#| description: Glob patterns to include (repeatable). Only matching files are indexed.
 include <- c()
 
-# Normalize paths (Rapp provides raw string values)
+#| description: Enable file discovery cache for incremental indexing
+cache <- FALSE
+
+#| description: Number of parallel workers (0 for sequential processing)
+parallel <- 0L
+
+#| description: Optional namespace prefix for emitted symbols
+namespace <- ""
+
+#| description: Override project name in SCIP metadata
+project_name <- ""
+
+# -----------------------------------------------------------------------------
+# Argument Processing
+# -----------------------------------------------------------------------------
+
+# Normalize paths
 root <- normalizePath(root, winslash = "/", mustWork = FALSE)
 output <- normalizePath(output, winslash = "/", mustWork = FALSE)
 
-# Validate and cap parallel workers at physical core count
+# Validate parallel workers
 parallel <- scipR:::validate_parallel_arg(parallel)
 
 # Convert empty strings to NULL for optional parameters
 namespace <- if (nzchar(namespace)) namespace else NULL
 project_name <- if (nzchar(project_name)) project_name else NULL
 
-# Process include patterns: filter out empty strings
+# Process include patterns (empty vector → NULL means "include all")
 include <- include[nzchar(include)]
-if (length(include) == 0) include <- NULL
+include <- if (length(include) > 0) include else NULL
 
-# Construct configuration object
+# -----------------------------------------------------------------------------
+# Execute Indexing Pipeline
+# -----------------------------------------------------------------------------
+
 cfg <- list(
   command = "create",
   root = root,
   output = output,
-  namespace = namespace,
-  `project-name` = project_name,
+  include = include,
   cache = isTRUE(cache),
   parallel = parallel,
-  include = include
+  namespace = namespace,
+  `project-name` = project_name
 )
 
-# Execute indexing pipeline
 scipR::index_project(cfg)

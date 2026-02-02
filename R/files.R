@@ -6,45 +6,50 @@ NULL
 # File Discovery Module
 # =============================================================================
 #
-# This module enumerates R source files for indexing, applying ignore rules
-# from .gitignore, .Rbuildignore, and built-in exclusions. It also manages
-# an optional file hash cache for incremental indexing.
+# Enumerates R source files for SCIP indexing with support for:
+#   - Gitignore/Rbuildignore exclusion patterns
+#   - Include patterns for selective indexing (like scip-go's directory args)
+#   - Incremental indexing via file hash caching
 #
-# Key design decisions:
+# Design notes:
 #   - Relative paths are computed BEFORE filtering to handle renv symlinks
 #     that resolve outside the project root (e.g., to ~/.cache/R/renv/...)
-#   - Gitignore semantics are approximated with three matching scopes:
-#     component (filename), suffix (trailing path segments), and path (full)
+#   - Gitignore semantics use three matching scopes: component (filename),
+#     suffix (trailing path segments), and path (full relative path)
 #   - Directory patterns (trailing /) match any file beneath that directory
+#   - Include patterns act as an allowlist when specified
 #
 # =============================================================================
 
 #' Discover source files for indexing.
 #'
-#' Enumerates all `.R` files under the project root, filters out ignored paths
-#' using rules from `.gitignore` and `.Rbuildignore`, computes file hashes,
-#' and optionally maintains a cache manifest for incremental indexing.
+#' Enumerates all `.R` files under the project root, applies exclusion rules
+#' from `.gitignore` and `.Rbuildignore`, optionally filters by include
+#' patterns, and maintains a cache manifest for incremental indexing.
 #'
 #' @param workspace Workspace list produced by `analyze_workspace()`.
 #' @param cache_enabled Logical; when TRUE, loads/saves a manifest to skip
 #'   unchanged files on subsequent runs.
-#' @param include_patterns Character vector of glob patterns. When provided,
-#'   only files matching at least one pattern are indexed. Patterns are matched
-#'   against relative paths (e.g., "R/*.R", "modules/**/*.R").
+#' @param include_patterns Character vector of glob patterns for selective
+#'   indexing. When provided, only files matching at least one pattern are
+#'   indexed. Patterns match against relative paths (e.g., "R/*.R",
+#'   "components/**/*.R"). When NULL (default), all non-ignored files are
+#'   indexed.
 #' @return A list with `files` (list of file descriptors) and `cache` (status).
 #' @keywords internal
 discover_files <- function(workspace, cache_enabled = FALSE, include_patterns = NULL) {
   root <- workspace$metadata$project_root
-  ignore <- workspace$ignore %||% list()
+  ignore_rules <- workspace$ignore %||% list()
+
+  # Cache management
+
   state_path <- file.path(root, ".scip-r", "state.rds")
   previous_state <- if (cache_enabled) load_cache_state(state_path) else list()
   current_state <- list()
 
   # Enumerate files using relative paths to avoid symlink resolution issues.
-  # renv creates symlinks in renv/library/ pointing to a global cache outside
-
-  # the project; using full.names=TRUE would resolve these, causing gitignore
-  # patterns like "renv/library/" to fail matching.
+  # renv creates symlinks in renv/library/ pointing to a global cache; using
+  # full.names=TRUE would resolve these, causing gitignore patterns to fail.
   all_relative <- list.files(
     root,
     pattern = "\\.R$",
@@ -61,27 +66,24 @@ discover_files <- function(workspace, cache_enabled = FALSE, include_patterns = 
 
   all_relative <- sort(all_relative)
 
-  # Compile include patterns to regex if provided
-  include_regexes <- NULL
-  if (!is.null(include_patterns) && length(include_patterns) > 0) {
-    include_regexes <- vapply(include_patterns, glob_to_regex, character(1))
-  }
+  # Pre-compile include patterns to regex for efficiency
+  include_regexes <- compile_include_patterns(include_patterns)
 
+  # Filter and collect file metadata
   files <- list()
 
   for (relative in all_relative) {
-    # Apply ignore rules first
-    if (matches_ignore(relative, ignore)) {
+    # Step 1: Apply exclusion rules (gitignore, Rbuildignore)
+    if (matches_ignore(relative, ignore_rules)) {
       next
     }
 
-    # Apply include filter if specified
-    if (!is.null(include_regexes)) {
-      if (!matches_any_pattern(relative, include_regexes)) {
-        next
-      }
+    # Step 2: Apply include filter (allowlist) if specified
+    if (!is.null(include_regexes) && !matches_any_pattern(relative, include_regexes)) {
+      next
     }
 
+    # Step 3: Collect file metadata
     path <- file.path(root, relative)
     hash <- digest_file(path)
     info <- file.info(path)
@@ -119,6 +121,37 @@ discover_files <- function(workspace, cache_enabled = FALSE, include_patterns = 
 }
 
 # =============================================================================
+# Include Pattern Matching
+# =============================================================================
+
+#' Compile include patterns to regex.
+#'
+#' @param patterns Character vector of glob patterns, or NULL.
+#' @return Character vector of regex patterns, or NULL if no patterns.
+#' @keywords internal
+compile_include_patterns <- function(patterns) {
+  if (is.null(patterns) || length(patterns) == 0) {
+    return(NULL)
+  }
+  vapply(patterns, glob_to_regex, character(1), USE.NAMES = FALSE)
+}
+
+#' Test if a path matches any include pattern.
+#'
+#' @param path Relative file path.
+#' @param regexes Character vector of compiled regex patterns.
+#' @return TRUE if path matches at least one pattern.
+#' @keywords internal
+matches_any_pattern <- function(path, regexes) {
+  for (rx in regexes) {
+    if (grepl(rx, path, perl = TRUE)) {
+      return(TRUE)
+    }
+  }
+  FALSE
+}
+
+# =============================================================================
 # Ignore Pattern Matching
 # =============================================================================
 
@@ -130,18 +163,17 @@ discover_files <- function(workspace, cache_enabled = FALSE, include_patterns = 
 #' match files anywhere beneath the specified directory.
 #'
 #' @param path Relative file path using forward slashes.
-#' @param ignore List of ignore rules from `detect_ignore_globs()`.
+#' @param rules List of ignore rules from `detect_ignore_rules()`.
 #' @return TRUE if the path should be ignored, FALSE otherwise.
 #' @keywords internal
-matches_ignore <- function(path, ignore) {
-  if (length(ignore) == 0) {
+matches_ignore <- function(path, rules) {
+  if (length(rules) == 0) {
     return(FALSE)
   }
 
   # Legacy support for simple regex character vectors
-
-if (is.character(ignore)) {
-    return(any(vapply(ignore, function(pat) {
+  if (is.character(rules)) {
+    return(any(vapply(rules, function(pat) {
       nzchar(pat) && grepl(pat, path, perl = TRUE)
     }, logical(1))))
   }
@@ -151,13 +183,12 @@ if (is.character(ignore)) {
     components <- path
   }
 
-  # Lazy-compute suffix and prefix variants only when needed
+  # Lazy-compute path variants only when needed
   suffixes <- NULL
   dir_prefixes <- NULL
-
   ignored <- FALSE
 
-  for (rule in ignore) {
+  for (rule in rules) {
     if (is.null(rule)) next
 
     # Legacy: bare regex string
@@ -171,7 +202,7 @@ if (is.character(ignore)) {
     scope <- rule$scope %||% "path"
     dir_only <- isTRUE(rule$dir_only)
 
-    # Select candidates based on scope
+    # Select match candidates based on scope
     candidates <- switch(
       scope,
       component = {
@@ -209,9 +240,14 @@ if (is.character(ignore)) {
 
     if (length(candidates) == 0) next
 
-    matched <- any(vapply(candidates, function(cand) {
-      nzchar(cand) && grepl(rule$regex, cand, perl = TRUE)
-    }, logical(1)))
+    # Check if any candidate matches the rule's regex
+    matched <- FALSE
+    for (cand in candidates) {
+      if (nzchar(cand) && grepl(rule$regex, cand, perl = TRUE)) {
+        matched <- TRUE
+        break
+      }
+    }
 
     if (matched) {
       ignored <- !isTRUE(rule$negate)
@@ -220,6 +256,10 @@ if (is.character(ignore)) {
 
   ignored
 }
+
+# =============================================================================
+# Path Variant Builders
+# =============================================================================
 
 #' Build suffix variants of a path (trailing segments).
 #'
@@ -241,7 +281,7 @@ build_path_suffixes <- function(components) {
 #' Build directory prefix variants of a path.
 #'
 #' For path "a/b/c/file.R", returns: c("a", "a/b", "a/b/c")
-#' Used for matching directory-only patterns like "a/b/".
+#' Used for matching directory-only patterns like "renv/library/".
 #'
 #' @param components Character vector of path segments.
 #' @return Character vector of directory prefixes (excludes filename).
@@ -254,16 +294,6 @@ build_dir_prefixes <- function(components) {
   vapply(seq_along(dir_parts), function(i) {
     paste(dir_parts[1:i], collapse = "/")
   }, character(1))
-}
-
-#' Test if a path matches any of the given regex patterns.
-#'
-#' @param path Relative file path.
-#' @param regexes Character vector of regex patterns (from glob_to_regex).
-#' @return TRUE if path matches at least one pattern.
-#' @keywords internal
-matches_any_pattern <- function(path, regexes) {
-  any(vapply(regexes, function(rx) grepl(rx, path, perl = TRUE), logical(1)))
 }
 
 # =============================================================================
