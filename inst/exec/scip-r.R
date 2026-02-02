@@ -1,7 +1,7 @@
 #!/usr/bin/env Rapp
 #| name: scip-r
 #| description: Generate SCIP index files for R projects
-#| version: 0.9
+#| version: 0.9.1
 #| launcher:
 #|   no-init-file: true
 
