@@ -2,6 +2,8 @@
 #| name: scip-r
 #| description: Generate SCIP index files for R projects
 #| version: 0.9
+#| launcher:
+#|   no-init-file: true
 
 # ============================================================================
 # PRIMARY CLI ENTRYPOINT for scipR

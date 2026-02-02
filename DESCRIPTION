@@ -43,7 +43,6 @@ Collate:
     'symbols-s4.R'
     'symbols-s3.R'
     'symbols-qualified.R'
-    'symbol-table.R'
     'symbols.R'
     'occurrences.R'
     'serializer.R'

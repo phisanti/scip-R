@@ -167,6 +167,38 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
     # not as SymbolInformation.Relationships. Relationships are reserved for
     # IsImplementation (class inheritance) and IsTypeDefinition only.
 
+    # =========================================================================
+    # POST-PROCESSING: Extract roxygen documentation for C++ results
+    # =========================================================================
+    # The C++ implementation doesn't extract roxygen docs (they require parsing
+    # comment tokens which is complex in C++). We extract them here in R.
+    #
+    # Algorithm:
+    #   1. Build symbol_id -> definition_line mapping from occurrences
+    #   2. For each symbol with a definition, extract roxygen docs from parse_data
+    # =========================================================================
+
+    # Build mapping from symbol ID to definition line
+    definition_lines <- new.env(hash = TRUE, parent = emptyenv())
+    for (occ in occurrences) {
+      if (identical(occ$role, "definition")) {
+        # range is c(line1, col1, line2, col2)
+        definition_lines[[occ$symbol]] <- occ$range[1]
+      }
+    }
+
+    # Extract roxygen documentation for each symbol with a definition
+    for (i in seq_along(symbols)) {
+      sym_id <- symbols[[i]]$symbol
+      def_line <- definition_lines[[sym_id]]
+      if (!is.null(def_line)) {
+        docs <- extract_roxygen_documentation(data, def_line)
+        if (!is.null(docs) && length(docs) > 0) {
+          symbols[[i]]$documentation <- docs
+        }
+      }
+    }
+
   } else {
     # ============================================================================
     # R FALLBACK IMPLEMENTATION
@@ -625,8 +657,10 @@ df_to_symbol_list <- function(df) {
     return(list())
   }
 
-  # Note: documentation is added as empty placeholder because C++ doesn't
-  # extract roxygen docs. Documentation is added later by the R post-processing.
+
+  # Note: documentation starts as empty placeholder because C++ doesn't extract
+
+  # roxygen docs. Post-processing in resolve_symbols() populates this field.
   lapply(seq_len(nrow(df)), function(i) {
     list(
       symbol = df$symbol[i],
