@@ -28,9 +28,12 @@ NULL
 #' @param workspace Workspace list produced by `analyze_workspace()`.
 #' @param cache_enabled Logical; when TRUE, loads/saves a manifest to skip
 #'   unchanged files on subsequent runs.
+#' @param include_patterns Character vector of glob patterns. When provided,
+#'   only files matching at least one pattern are indexed. Patterns are matched
+#'   against relative paths (e.g., "R/*.R", "modules/**/*.R").
 #' @return A list with `files` (list of file descriptors) and `cache` (status).
 #' @keywords internal
-discover_files <- function(workspace, cache_enabled = FALSE) {
+discover_files <- function(workspace, cache_enabled = FALSE, include_patterns = NULL) {
   root <- workspace$metadata$project_root
   ignore <- workspace$ignore %||% list()
   state_path <- file.path(root, ".scip-r", "state.rds")
@@ -57,11 +60,26 @@ discover_files <- function(workspace, cache_enabled = FALSE) {
   }
 
   all_relative <- sort(all_relative)
+
+  # Compile include patterns to regex if provided
+  include_regexes <- NULL
+  if (!is.null(include_patterns) && length(include_patterns) > 0) {
+    include_regexes <- vapply(include_patterns, glob_to_regex, character(1))
+  }
+
   files <- list()
 
   for (relative in all_relative) {
+    # Apply ignore rules first
     if (matches_ignore(relative, ignore)) {
       next
+    }
+
+    # Apply include filter if specified
+    if (!is.null(include_regexes)) {
+      if (!matches_any_pattern(relative, include_regexes)) {
+        next
+      }
     }
 
     path <- file.path(root, relative)
@@ -232,11 +250,20 @@ build_dir_prefixes <- function(components) {
   n <- length(components)
   if (n <= 1) return(character())
 
-  # Exclude the filename (last component)
   dir_parts <- components[-n]
   vapply(seq_along(dir_parts), function(i) {
     paste(dir_parts[1:i], collapse = "/")
   }, character(1))
+}
+
+#' Test if a path matches any of the given regex patterns.
+#'
+#' @param path Relative file path.
+#' @param regexes Character vector of regex patterns (from glob_to_regex).
+#' @return TRUE if path matches at least one pattern.
+#' @keywords internal
+matches_any_pattern <- function(path, regexes) {
+  any(vapply(regexes, function(rx) grepl(rx, path, perl = TRUE), logical(1)))
 }
 
 # =============================================================================

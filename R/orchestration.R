@@ -72,7 +72,11 @@ index_project <- function(cfg) {
 
   # Discover files to index
   t_disc <- bench_start("discover_files", list(cache = cfg$cache))
-  plan <- discover_files(workspace, cache_enabled = cfg$cache)
+  plan <- discover_files(
+    workspace,
+    cache_enabled = cfg$cache,
+    include_patterns = cfg$include
+  )
   bench_end(t_disc, list(file_count = length(plan$files)))
 
   # Determine execution mode

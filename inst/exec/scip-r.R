@@ -42,6 +42,9 @@ cache <- FALSE
 #| description: Number of parallel workers (0 for sequential)
 parallel <- 0L
 
+#| description: Glob patterns to include (repeatable). Only files matching at least one pattern are indexed.
+include <- c()
+
 # Normalize paths (Rapp provides raw string values)
 root <- normalizePath(root, winslash = "/", mustWork = FALSE)
 output <- normalizePath(output, winslash = "/", mustWork = FALSE)
@@ -53,6 +56,10 @@ parallel <- scipR:::validate_parallel_arg(parallel)
 namespace <- if (nzchar(namespace)) namespace else NULL
 project_name <- if (nzchar(project_name)) project_name else NULL
 
+# Process include patterns: filter out empty strings
+include <- include[nzchar(include)]
+if (length(include) == 0) include <- NULL
+
 # Construct configuration object
 cfg <- list(
   command = "create",
@@ -61,7 +68,8 @@ cfg <- list(
   namespace = namespace,
   `project-name` = project_name,
   cache = isTRUE(cache),
-  parallel = parallel
+  parallel = parallel,
+  include = include
 )
 
 # Execute indexing pipeline
