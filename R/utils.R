@@ -33,3 +33,21 @@ NULL
   }
   lhs
 }
+
+#' Escape an identifier for SCIP symbol strings.
+#'
+#' Per the SCIP spec, valid identifier characters are `_`, `+`, `-`, `$`,
+#' ASCII letters, and digits. Names containing anything else (notably `.`
+#' in R) must be backtick-quoted. Internal backticks are escaped by doubling.
+#'
+#' @param name Character scalar: the raw identifier name.
+#' @return The name unchanged if it only contains identifier characters,
+#'   or backtick-quoted otherwise.
+#' @keywords internal
+escape_scip_identifier <- function(name) {
+  if (grepl("[^A-Za-z0-9_+$-]", name)) {
+    escaped <- gsub("`", "``", name, fixed = TRUE)
+    return(paste0("`", escaped, "`"))
+  }
+  name
+}

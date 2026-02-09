@@ -308,8 +308,9 @@ build_external_symbol_messages <- function(externals) {
         next
       }
 
-      # Build SCIP symbol descriptor
-      sym$symbol <- sprintf("scip-r %s %s %s().", pkg_name, pkg_version, sym_name)
+      # Build SCIP symbol descriptor (backtick-quote dotted R names)
+      esc_name <- escape_scip_identifier(sym_name)
+      sym$symbol <- sprintf("scip-r %s %s %s().", pkg_name, pkg_version, esc_name)
       msgs[[length(msgs) + 1]] <- sym
     }
   }

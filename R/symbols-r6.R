@@ -406,7 +406,7 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
           suffix <- "."
         }
 
-        member_symbol <- paste0(class_symbol, "#", member_name, suffix)
+        member_symbol <- paste0(class_symbol, "#", escape_scip_identifier(member_name), suffix)
 
         symbols[[length(symbols) + 1]] <- list(
           symbol = member_symbol,
@@ -433,7 +433,7 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
           suffix <- "."
         }
 
-        member_symbol <- paste0(class_symbol, "#", member_name, suffix)
+        member_symbol <- paste0(class_symbol, "#", escape_scip_identifier(member_name), suffix)
 
         symbols[[length(symbols) + 1]] <- list(
           symbol = member_symbol,
@@ -444,12 +444,12 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
         )
       }
     }
-    
+
     # Process active bindings (list of {name, is_method} info, treat as properties)
     if (!is.null(class_info$active_members) && length(class_info$active_members) > 0) {
       for (member_info in class_info$active_members) {
         member_name <- member_info$name
-        member_symbol <- paste0(class_symbol, "#", member_name, ".")
+        member_symbol <- paste0(class_symbol, "#", escape_scip_identifier(member_name), ".")
 
         symbols[[length(symbols) + 1]] <- list(
           symbol = member_symbol,
@@ -480,10 +480,11 @@ build_r6_symbol_id <- function(name, relative_path, namespace = NULL) {
   base_path <- gsub("/", "_", base_path)
   base_path <- gsub("-", "_", base_path)
   
-  # Build local symbol ID
+  # Build local symbol ID (backtick-quote dotted R names per SCIP spec)
+  esc_name <- escape_scip_identifier(name)
   if (!is.null(namespace) && nzchar(namespace)) {
-    sprintf("%s %s#%s", namespace, base_path, name)
+    sprintf("%s %s#%s", namespace, base_path, esc_name)
   } else {
-    sprintf("local %s#%s", base_path, name)
+    sprintf("local %s#%s", base_path, esc_name)
   }
 }

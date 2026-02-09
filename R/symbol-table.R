@@ -190,17 +190,20 @@ build_symbol_table <- function(parsed_files, workspace) {
 build_global_symbol_id <- function(name, package_name, package_version, kind = "function") {
   # Format: scip-r r <package> <version> <suffix>
   # Suffix: functions get "()", variables get ".", classes get "#"
+  # Names with non-identifier chars (e.g. dots in R) must be backtick-quoted
+  # per the SCIP spec (dots are descriptor delimiters, not identifier chars).
+  esc_name <- escape_scip_identifier(name)
   suffix <- switch(
     kind,
-    `function` = paste0(name, "()."),
-    call = paste0(name, "()."),
-    s3_generic = paste0(name, "()."),
-    s3_method = paste0(name, "()."),
-    r6_class = paste0(name, "#"),
-    s4_class = paste0(name, "#"),
-    variable = paste0(name, "."),
+    `function` = paste0(esc_name, "()."),
+    call = paste0(esc_name, "()."),
+    s3_generic = paste0(esc_name, "()."),
+    s3_method = paste0(esc_name, "()."),
+    r6_class = paste0(esc_name, "#"),
+    s4_class = paste0(esc_name, "#"),
+    variable = paste0(esc_name, "."),
     # Default to function-style for unknown kinds
-    paste0(name, "().")
+    paste0(esc_name, "().")
   )
 
   sprintf("scip-r r %s %s %s", package_name, package_version, suffix)
@@ -231,13 +234,16 @@ build_external_symbol_id <- function(name, package_name, package_version = "0.0.
 #' @keywords internal
 build_local_symbol_id <- function(name, relative_path, scope_id = NULL) {
   sanitized_path <- gsub("[^A-Za-z0-9_/]", "_", relative_path)
-  sanitized_name <- gsub("[^A-Za-z0-9_]", "_", name)
+  # Use SCIP backtick-quoting to preserve dots (and other special chars)
+  # instead of stripping them. The Go decoder handles backtick-quoted
+  # identifiers in local IDs via parseDescriptors().
+  esc_name <- escape_scip_identifier(name)
 
   if (!is.null(scope_id) && nzchar(scope_id)) {
-    sanitized_scope <- gsub("[^A-Za-z0-9_]", "_", scope_id)
-    local_id <- paste0(sanitized_path, "#", sanitized_scope, "#", sanitized_name)
+    esc_scope <- escape_scip_identifier(scope_id)
+    local_id <- paste0(sanitized_path, "#", esc_scope, "#", esc_name)
   } else {
-    local_id <- paste0(sanitized_path, "#", sanitized_name)
+    local_id <- paste0(sanitized_path, "#", esc_name)
   }
 
   paste("local", local_id)

@@ -456,9 +456,11 @@ build_shiny_symbol_id <- function(name, relative_path, namespace = NULL) {
   base_path <- gsub("/", "_", base_path)
   base_path <- gsub("-", "_", base_path)
 
+  # Backtick-quote dotted R names per SCIP spec
+  esc_name <- escape_scip_identifier(name)
   if (!is.null(namespace) && nzchar(namespace)) {
-    sprintf("%s %s#%s", namespace, base_path, name)
+    sprintf("%s %s#%s", namespace, base_path, esc_name)
   } else {
-    sprintf("local %s#%s", base_path, name)
+    sprintf("local %s#%s", base_path, esc_name)
   }
 }
