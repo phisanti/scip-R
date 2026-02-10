@@ -34,6 +34,12 @@ map_occurrences <- function(symbol_data, ast_module) {
 
   # Process each occurrence to compute enclosing range
   lapply(occurrences, function(occ) {
+    # List closure definitions carry their function body range directly
+    if (!is.null(occ$closure_func_range)) {
+      occ$enclosing_range <- occ$closure_func_range
+      occ$closure_func_range <- NULL  # Clean up internal field
+      return(occ)
+    }
     enclosing <- compute_enclosing_range(occ, parse_data, tree_index)
     if (!is.null(enclosing)) {
       occ$enclosing_range <- enclosing
@@ -121,6 +127,12 @@ find_enclosing_definition <- function(node_id, parse_data, tree_index) {
         if (!is.na(child_row_idx)) {
           child_token <- parse_data$token[child_row_idx]
           if (child_token %in% c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")) {
+            assignment_expr <- parse_data[row_idx, , drop = FALSE]
+            break
+          }
+          # EQ_SUB means this is a named list element (name = value)
+          # The enclosing range should be the parent expr containing the value
+          if (child_token == "EQ_SUB") {
             assignment_expr <- parse_data[row_idx, , drop = FALSE]
             break
           }
