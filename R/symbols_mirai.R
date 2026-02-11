@@ -100,8 +100,12 @@ resolve_documents_mirai <- function(files, workspace, daemons = parallel::detect
       {
         library(scipR)
         # OPTIMIZATION: Reuse tree_index from Phase 2
+        # OPTIMIZATION: Build tree_index once and share between resolve_symbols and map_occurrences
+        if (is.null(tree_index)) {
+          tree_index <- build_tree_index(ast$parse_data)
+        }
         analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = symbol_table, tree_index = tree_index)
-        occurrences <- map_occurrences(analysis, ast)
+        occurrences <- map_occurrences(analysis, ast, tree_index = tree_index)
         document <- build_document(file_info, occurrences, analysis)
         diagnostics <- collect_diagnostics(file_info, ast, analysis)
         list(document = document, diagnostics = diagnostics, external_refs = analysis$external_refs)
