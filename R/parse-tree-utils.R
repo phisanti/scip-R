@@ -45,11 +45,13 @@ build_tree_index <- function(parse_data) {
   bench_count("build_tree_index_call")
 
   if (is.null(parse_data) || nrow(parse_data) == 0) {
+    empty_env <- new.env(hash = TRUE, parent = emptyenv())
     return(list(
-      children = list(),
-      parent = integer(0),
-      rows = list(),
-      by_line = list(),
+      children = empty_env,
+      parent = empty_env,
+      rows = empty_env,
+      by_line = empty_env,
+      has_func_on_line = empty_env,
       data = parse_data,
       cpp_index = NULL,
       enclosing_function = integer(0),
@@ -66,26 +68,36 @@ build_tree_index <- function(parse_data) {
     )
   }
 
-  # Pre-compute children: parent_id -> vector of child ids
-  children <- split(parse_data$id, parse_data$parent)
+  ids_char <- as.character(parse_data$id)
 
-  # Pre-compute parent lookup: node_id -> parent_id
-  parent <- stats::setNames(parse_data$parent, as.character(parse_data$id))
+  # Pre-compute children: parent_id -> vector of child ids (environment for O(1) lookup)
+  children_list <- split(parse_data$id, parse_data$parent)
+  children <- list2env(children_list, hash = TRUE, parent = emptyenv(), size = length(children_list))
 
-  # Pre-compute row indices: node_id -> row index in parse_data
-  rows <- stats::setNames(seq_len(nrow(parse_data)), as.character(parse_data$id))
+  # Pre-compute parent lookup: node_id -> parent_id (environment for O(1) lookup)
+  parent_vec <- stats::setNames(parse_data$parent, ids_char)
+  parent <- list2env(as.list(parent_vec), hash = TRUE, parent = emptyenv(), size = nrow(parse_data))
+
+  # Pre-compute row indices: node_id -> row index (environment for O(1) lookup)
+  rows_vec <- stats::setNames(seq_len(nrow(parse_data)), ids_char)
+  rows <- list2env(as.list(rows_vec), hash = TRUE, parent = emptyenv(), size = nrow(parse_data))
 
   # Pre-compute line index: line_number -> vector of row indices
-  by_line <- split(seq_len(nrow(parse_data)), parse_data$line1)
+  by_line_list <- split(seq_len(nrow(parse_data)), parse_data$line1)
+  by_line <- list2env(by_line_list, hash = TRUE, parent = emptyenv(), size = length(by_line_list))
 
   # Pre-compute which lines contain function definitions (FUNCTION or OP-LAMBDA tokens)
   func_tokens <- c("FUNCTION", "OP-LAMBDA")
   func_lines <- unique(parse_data$line1[parse_data$token %in% func_tokens])
-  has_func_on_line <- stats::setNames(rep(TRUE, length(func_lines)), as.character(func_lines))
+  has_func_on_line <- new.env(hash = TRUE, parent = emptyenv(), size = max(length(func_lines), 1L))
+  for (fl in as.character(func_lines)) {
+    has_func_on_line[[fl]] <- TRUE
+  }
 
   # Pre-compute enclosing function for each node (O(n) single pass)
   # This enables O(1) "is inside function" checks instead of O(depth) tree walks
-  scope_result <- build_scope_index(parse_data, rows, parent)
+  # Note: build_scope_index needs named vectors for vectorized indexing
+  scope_result <- build_scope_index(parse_data, rows_vec, parent_vec)
 
   list(
     children = children,
@@ -250,7 +262,7 @@ rcpp_available <- function() {
 #' @return Integer vector of child node IDs.
 #' @keywords internal
 get_children_indexed <- function(node_id, index) {
-  index$children[[as.character(node_id)]] %||% integer(0)
+  get0(as.character(node_id), envir = index$children, ifnotfound = integer(0), inherits = FALSE)
 }
 
 #' Get parent ID using pre-computed index (O(1)).
@@ -260,12 +272,7 @@ get_children_indexed <- function(node_id, index) {
 #' @return Integer parent ID, or NA if no parent.
 #' @keywords internal
 get_parent_id_indexed <- function(node_id, index) {
-  key <- as.character(node_id)
-  if (key %in% names(index$parent)) {
-    index$parent[[key]]
-  } else {
-    NA_integer_
-  }
+  get0(as.character(node_id), envir = index$parent, ifnotfound = NA_integer_, inherits = FALSE)
 }
 
 #' Get row index for a node using pre-computed index (O(1)).
@@ -275,12 +282,7 @@ get_parent_id_indexed <- function(node_id, index) {
 #' @return Integer row index in parse_data, or NA if not found.
 #' @keywords internal
 get_row_indexed <- function(node_id, index) {
-  key <- as.character(node_id)
-  if (key %in% names(index$rows)) {
-    index$rows[[key]]
-  } else {
-    NA_integer_
-  }
+  get0(as.character(node_id), envir = index$rows, ifnotfound = NA_integer_, inherits = FALSE)
 }
 
 #' Check if a node is inside a function body using pre-computed index (O(1)).
@@ -700,7 +702,7 @@ find_on_same_line_indexed <- function(node_id, index, token_types = NULL, positi
   col <- index$data$col1[row_idx]
 
   # O(1) lookup of row indices on this line
-  line_row_indices <- index$by_line[[as.character(line)]]
+  line_row_indices <- get0(as.character(line), envir = index$by_line, ifnotfound = NULL, inherits = FALSE)
   if (is.null(line_row_indices) || length(line_row_indices) == 0) {
     return(index$data[integer(0), , drop = FALSE])
   }

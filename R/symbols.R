@@ -556,7 +556,7 @@ is_function_definition_indexed <- function(row, parse_data, index) {
   # FAST PATH: If no FUNCTION/OP-LAMBDA token on this line, can't be a function definition
   # This avoids expensive subtree traversal for ~95% of cases
   line_key <- as.character(line)
-  if (length(index$has_func_on_line) == 0 || !line_key %in% names(index$has_func_on_line)) {
+  if (!exists(line_key, envir = index$has_func_on_line, inherits = FALSE)) {
     return(FALSE)
   }
 
@@ -716,7 +716,7 @@ extract_list_closure_definitions <- function(data, tree_index) {
     eq_row <- eq_sub_rows[i, ]
 
     # Skip if inside a function body
-    row_idx <- tree_index$rows[[as.character(eq_row$id)]]
+    row_idx <- get_row_indexed(eq_row$id, tree_index)
     if (!is.na(row_idx) && isTRUE(inside_func_mask[row_idx])) {
       next
     }

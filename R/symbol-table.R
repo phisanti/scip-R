@@ -295,7 +295,7 @@ extract_top_level_definitions_with_index <- function(ast_module) {
 
     # O(1) check: is this assignment inside a function body?
     # Use row index from tree_index for direct lookup
-    row_idx <- tree_index$rows[[as.character(assign_row$id)]]
+    row_idx <- get_row_indexed(assign_row$id, tree_index)
     if (!is.na(row_idx) && isTRUE(inside_func_mask[row_idx])) {
       next
     }

@@ -13,11 +13,17 @@ NULL
 #' For definitions, the enclosing range spans the entire definition (assignment
 #' or function body). For references, it spans the parent expression/statement.
 #'
+#' Uses vectorized `match()` for O(n+m) node lookup instead of per-occurrence
+#' O(n) data.frame scans. This reduces the overall complexity from O(n*m) to
+#' O(n+m) where n=occurrences and m=parse_data rows.
+#'
 #' @param symbol_data Symbol resolution output.
 #' @param ast_module Parsed module data.
+#' @param tree_index Optional pre-built tree index from build_tree_index().
+#'   If NULL, one will be built. Passing a cached index avoids redundant work.
 #' @return A list of occurrence entries with symbol identifiers, ranges, and enclosing ranges.
 #' @keywords internal
-map_occurrences <- function(symbol_data, ast_module) {
+map_occurrences <- function(symbol_data, ast_module, tree_index = NULL) {
   occurrences <- symbol_data$occurrences %||% list()
 
   if (length(occurrences) == 0) {
@@ -25,27 +31,89 @@ map_occurrences <- function(symbol_data, ast_module) {
   }
 
   parse_data <- ast_module$parse_data
+
+  n_occ <- length(occurrences)
+
+  # Handle closure definitions first (they carry pre-computed ranges, no parse_data needed)
+  closure_mask <- logical(n_occ)
+  for (i in seq_len(n_occ)) {
+    if (!is.null(occurrences[[i]]$closure_func_range)) {
+      occurrences[[i]]$enclosing_range <- occurrences[[i]]$closure_func_range
+      occurrences[[i]]$closure_func_range <- NULL
+      closure_mask[i] <- TRUE
+    }
+  }
+
+  # Early return if no parse_data or all occurrences are closures
   if (is.null(parse_data) || nrow(parse_data) == 0) {
     return(occurrences)
   }
 
-  # Build tree index once for O(1) lookups
-  tree_index <- build_tree_index(parse_data)
+  # Identify occurrences that need enclosing range computation
+  idx_to_process <- which(!closure_mask)
+  if (length(idx_to_process) == 0) {
+    return(occurrences)
+  }
 
-  # Process each occurrence to compute enclosing range
-  lapply(occurrences, function(occ) {
-    # List closure definitions carry their function body range directly
-    if (!is.null(occ$closure_func_range)) {
-      occ$enclosing_range <- occ$closure_func_range
-      occ$closure_func_range <- NULL  # Clean up internal field
-      return(occ)
+  # Reuse tree index if provided, otherwise build once
+  if (is.null(tree_index)) {
+    tree_index <- build_tree_index(parse_data)
+  }
+
+  # Extract ranges as vectors for vectorized matching (0-based SCIP -> 1-based R)
+  occ_line1 <- integer(length(idx_to_process))
+  occ_col1 <- integer(length(idx_to_process))
+  occ_line2 <- integer(length(idx_to_process))
+  occ_col2 <- integer(length(idx_to_process))
+  occ_roles <- character(length(idx_to_process))
+
+  for (j in seq_along(idx_to_process)) {
+    r <- occurrences[[idx_to_process[j]]]$range
+    occ_line1[j] <- r[1] + 1L
+    occ_col1[j] <- r[2] + 1L
+    occ_line2[j] <- r[3] + 1L
+    occ_col2[j] <- r[4]
+    occ_roles[j] <- occurrences[[idx_to_process[j]]]$role %||% "reference"
+  }
+
+  # Build position keys for vectorized matching via match() — O(n+m)
+  pd_keys <- paste(parse_data$line1, parse_data$col1, parse_data$line2, parse_data$col2, sep = ":")
+  occ_keys <- paste(occ_line1, occ_col1, occ_line2, occ_col2, sep = ":")
+
+  # Single match() call replaces n per-occurrence data.frame scans
+  match_idx <- match(occ_keys, pd_keys)
+
+  # Fallback for unmatched: try (line1, col1) only
+  unmatched <- is.na(match_idx)
+  if (any(unmatched)) {
+    pd_keys_partial <- paste(parse_data$line1, parse_data$col1, sep = ":")
+    occ_keys_partial <- paste(occ_line1[unmatched], occ_col1[unmatched], sep = ":")
+    match_idx[unmatched] <- match(occ_keys_partial, pd_keys_partial)
+  }
+
+  # Compute enclosing ranges using tree walks (O(depth) per occurrence)
+  for (j in seq_along(idx_to_process)) {
+    m <- match_idx[j]
+    if (is.na(m)) next
+
+    node_id <- parse_data$id[m]
+    enclosing_node <- if (identical(occ_roles[j], "definition")) {
+      find_enclosing_definition(node_id, parse_data, tree_index)
+    } else {
+      find_enclosing_expression(node_id, parse_data, tree_index)
     }
-    enclosing <- compute_enclosing_range(occ, parse_data, tree_index)
-    if (!is.null(enclosing)) {
-      occ$enclosing_range <- enclosing
+
+    if (!is.null(enclosing_node) && nrow(enclosing_node) > 0) {
+      occurrences[[idx_to_process[j]]]$enclosing_range <- c(
+        enclosing_node$line1[1] - 1L,
+        enclosing_node$col1[1] - 1L,
+        enclosing_node$line2[1] - 1L,
+        enclosing_node$col2[1]
+      )
     }
-    occ
-  })
+  }
+
+  occurrences
 }
 
 #' Compute the enclosing range for an occurrence.

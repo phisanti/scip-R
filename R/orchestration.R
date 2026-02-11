@@ -275,15 +275,19 @@ process_single_file <- function(file_info, workspace) {
 #'   }
 #' @keywords internal
 process_single_file_with_table <- function(file_info, ast, workspace, symbol_table, tree_index = NULL) {
+  # OPTIMIZATION: Build tree_index once and share between resolve_symbols and map_occurrences
+  if (is.null(tree_index)) {
+    tree_index <- build_tree_index(ast$parse_data)
+  }
+
   # Resolve symbols with cross-file resolution via symbol table
-  # OPTIMIZATION: Reuse tree_index from Phase 2 if available
   t_resolve <- bench_start("phase3_resolve_symbols", list(file = file_info$relative_path %||% basename(file_info$path)))
   analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = symbol_table, tree_index = tree_index)
   bench_end(t_resolve, list(symbol_count = length(analysis$symbols), occurrence_count = length(analysis$occurrences)))
 
-  # Map symbols to occurrence positions
+  # Map symbols to occurrence positions (reuse tree_index)
   t_map <- bench_start("phase3_map_occurrences")
-  occurrences <- map_occurrences(analysis, ast)
+  occurrences <- map_occurrences(analysis, ast, tree_index = tree_index)
   bench_end(t_map)
 
   # Build SCIP document message
