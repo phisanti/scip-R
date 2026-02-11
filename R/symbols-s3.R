@@ -296,11 +296,12 @@ s3_to_scip <- function(s3_info, workspace) {
 #' }
 build_s3_symbol_entries <- function(ast_module, relative_path, namespace = NULL) {
   s3_infos <- extract_s3_symbols(ast_module)
-  
+
   if (length(s3_infos) == 0) {
     return(list())
   }
-  
+
+  data <- ast_module$parse_data
   symbols <- list()
   
   for (s3_info in s3_infos) {
@@ -321,10 +322,10 @@ build_s3_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
       symbol = symbol_id,
       display_name = display_name,
       kind = kind,
-      documentation = NULL
+      documentation = extract_roxygen_documentation(data, s3_info$range[1])
     )
   }
-  
+
   symbols
 }
 

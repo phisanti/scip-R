@@ -347,7 +347,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         symbol = closure_symbol_id,
         display_name = closure$name,
         kind = "function",
-        documentation = list()
+        documentation = extract_roxygen_documentation(data, closure$name_range[1])
       )
 
       # Add definition occurrence at the SYMBOL_SUB position

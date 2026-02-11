@@ -305,6 +305,7 @@ build_s4_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
     return(list())
   }
 
+  data <- ast_module$parse_data
   symbols <- list()
 
   for (s4_info in s4_infos) {
@@ -315,7 +316,7 @@ build_s4_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
         symbol = class_symbol,
         display_name = s4_info$class_name,
         kind = "s4_class",
-        documentation = NULL
+        documentation = extract_roxygen_documentation(data, s4_info$range[1])
       )
 
       if (!is.null(s4_info$slots) && length(s4_info$slots) > 0) {
@@ -339,7 +340,7 @@ build_s4_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
         symbol = symbol_id,
         display_name = s4_info$generic_name,
         kind = "s4_generic",
-        documentation = NULL
+        documentation = extract_roxygen_documentation(data, s4_info$range[1])
       )
 
     } else if (s4_info$type == "s4_method") {
@@ -354,7 +355,7 @@ build_s4_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
         symbol = symbol_id,
         display_name = method_name,
         kind = "s4_method",
-        documentation = NULL
+        documentation = extract_roxygen_documentation(data, s4_info$range[1])
       )
     }
   }

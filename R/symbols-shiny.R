@@ -382,6 +382,7 @@ build_shiny_symbol_entries <- function(ast_module, relative_path, namespace = NU
     return(list())
   }
 
+  data <- ast_module$parse_data
   symbols <- list()
 
   for (shiny_info in shiny_infos) {
@@ -435,7 +436,7 @@ build_shiny_symbol_entries <- function(ast_module, relative_path, namespace = NU
       symbol = symbol_id,
       display_name = display_name,
       kind = kind,
-      documentation = NULL
+      documentation = extract_roxygen_documentation(data, shiny_info$range[1])
     )
   }
 

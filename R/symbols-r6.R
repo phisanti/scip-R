@@ -369,11 +369,12 @@ extract_members_r6 <- function(descendants, data, member_type) {
 #' }
 build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL) {
   r6_classes <- extract_r6_symbols(ast_module)
-  
+
   if (length(r6_classes) == 0) {
     return(list())
   }
-  
+
+  data <- ast_module$parse_data
   symbols <- list()
   
   for (class_info in r6_classes) {
@@ -385,7 +386,7 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
       symbol = class_symbol,
       display_name = class_info$class_name,
       kind = "r6_class",
-      documentation = NULL
+      documentation = extract_roxygen_documentation(data, class_info$range[1])
     )
     
     # Process public members (list of {name, is_method} info)
