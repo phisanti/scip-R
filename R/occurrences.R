@@ -133,16 +133,16 @@ compute_enclosing_range <- function(occurrence, parse_data, tree_index) {
 
   candidates <- parse_data[
     parse_data$line1 == start_line &
-    parse_data$col1 == start_col &
-    parse_data$line2 == end_line &
-    parse_data$col2 == end_col,
+      parse_data$col1 == start_col &
+      parse_data$line2 == end_line &
+      parse_data$col2 == end_col,
     , drop = FALSE
   ]
 
   if (nrow(candidates) == 0) {
     candidates <- parse_data[
       parse_data$line1 == start_line &
-      parse_data$col1 == start_col,
+        parse_data$col1 == start_col,
       , drop = FALSE
     ]
   }
