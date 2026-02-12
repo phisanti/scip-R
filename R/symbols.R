@@ -136,6 +136,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         parse_data = data,
         tree_index_ptr = tree_index$cpp_index,
         inside_function = tree_index$inside_function %||% logical(nrow(data)),
+        enclosing_function = tree_index$enclosing_function %||% integer(nrow(data)),
         definitions_env = definitions_env %||% new.env(hash = TRUE, parent = emptyenv()),
         base_r_funcs = BASE_R_FUNCTIONS,
         relative_path = relative_path,
@@ -281,6 +282,16 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
           is_inside_function_indexed(row$id, tree_index)
       }
 
+      # Get enclosing function name for scope encoding in local symbol IDs.
+      # This enables distinguishing local vars inside functions (2-hash IDs)
+      # from top-level file assignments (1-hash IDs), which is critical for
+      # dead code detection to avoid false positives on function-local variables.
+      enclosing_name <- if (is_local_scope) {
+        get_enclosing_function_name(row$id, tree_index)
+      } else {
+        NULL
+      }
+
       # LAZY LOCAL SYMBOL CREATION: Resolve symbol with environment lookups
       symbol_id <- resolve_symbol_id_fast(
         name = name,
@@ -291,7 +302,8 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         relative_path = relative_path,
         definitions_env = definitions_env,
         local_registry = local_symbol_registry,
-        local_counter_env = environment()  # For updating local_counter
+        local_counter_env = environment(),  # For updating local_counter
+        enclosing_name = enclosing_name
       )
 
       # For definitions in this file, check if we've already seen this symbol
@@ -559,20 +571,21 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
 #' @keywords internal
 resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
                                     is_call, relative_path, definitions_env,
-                                    local_registry, local_counter_env) {
+                                    local_registry, local_counter_env,
+                                    enclosing_name = NULL) {
   bench_count("phase3_resolve_fast")
 
   # If no definitions_env, fall back to local symbol
   if (is.null(definitions_env)) {
     bench_count("phase3_fast_no_table")
-    return(build_local_symbol_id(name, relative_path))
+    return(build_local_symbol_id(name, relative_path, scope_id = enclosing_name))
   }
 
   # For truly local symbols (params, loop vars, vars inside functions),
   # use local symbol IDs unless it's a function call that might resolve globally
   if (is_local_scope && is_definition && kind != "function") {
     bench_count("phase3_fast_local_def")
-    return(build_local_symbol_id(name, relative_path))
+    return(build_local_symbol_id(name, relative_path, scope_id = enclosing_name))
   }
 
   # O(1) lookup in definitions environment
@@ -589,16 +602,22 @@ resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
   }
 
   # LAZY LOCAL SYMBOL CREATION:
-  # Create local symbol on-demand, deduplicate by name within file
+  # Create local symbol on-demand, deduplicate by name+scope within file
   bench_count("phase3_fast_local_lazy")
-  local_key <- paste0(relative_path, "#", name)
+  # Include scope in dedup key to avoid collisions between same-named vars
+  # in different functions (e.g., x inside func_a vs x inside func_b)
+  if (!is.null(enclosing_name) && nzchar(enclosing_name)) {
+    local_key <- paste0(relative_path, "#", enclosing_name, "#", name)
+  } else {
+    local_key <- paste0(relative_path, "#", name)
+  }
   existing <- local_registry[[local_key]]
   if (!is.null(existing)) {
     return(existing)
   }
 
   # Create new local symbol
-  symbol_id <- build_local_symbol_id(name, relative_path)
+  symbol_id <- build_local_symbol_id(name, relative_path, scope_id = enclosing_name)
   local_registry[[local_key]] <- symbol_id
   symbol_id
 }

@@ -503,16 +503,33 @@ std::string escape_scip_identifier(const std::string& name) {
 
 /// Build a local (file-scoped) symbol ID.
 /// Local symbols are not resolvable from other files.
-/// Format: "local <sanitized_path>#<escaped_name>"
+/// Format without scope: "local <sanitized_path>#<escaped_name>"
+/// Format with scope:    "local <sanitized_path>#<escaped_scope>#<escaped_name>"
+///
+/// When scope_id is provided (enclosing function name), it creates a 2-hash ID
+/// that distinguishes local variables inside functions from top-level file
+/// assignments. This is critical for dead code detection to avoid false positives
+/// on function-local variables.
 ///
 /// Uses SCIP backtick-quoting for names with special chars (e.g. dots in R)
 /// to preserve the original name instead of stripping information.
 ///
 /// @param name Symbol name (e.g., "x", "has.pgx")
 /// @param path Relative file path (e.g., "R/utils.R")
+/// @param scope_id Optional enclosing function name (e.g., "my_func", "pgx.create")
 /// @return Symbol ID string
-std::string build_local_symbol_id(const std::string& name, const std::string& path) {
-  return "local " + sanitize_path_for_symbol_id(path) + "#" + escape_scip_identifier(name);
+std::string build_local_symbol_id(
+    const std::string& name,
+    const std::string& path,
+    const std::string& scope_id = ""
+) {
+  std::string base = "local " + sanitize_path_for_symbol_id(path);
+
+  if (!scope_id.empty()) {
+    return base + "#" + escape_scip_identifier(scope_id) + "#" + escape_scip_identifier(name);
+  }
+
+  return base + "#" + escape_scip_identifier(name);
 }
 
 /// Build a global (package-level) or external symbol ID.
@@ -673,12 +690,13 @@ std::string resolve_symbol(
     const std::unordered_set<std::string>& base_r_set,
     std::unordered_map<std::string, std::string>& local_registry,
     const std::string& package_name,
-    const std::string& r_version
+    const std::string& r_version,
+    const std::string& enclosing_name = ""
 ) {
   // Local definitions (inside functions) that aren't function definitions
   // should always get local symbol IDs
   if (is_local_scope && is_definition && kind != "function") {
-    return build_local_symbol_id(name, relative_path);
+    return build_local_symbol_id(name, relative_path, enclosing_name);
   }
 
   // Try to find in package symbol table (cross-file resolution)
@@ -695,13 +713,20 @@ std::string resolve_symbol(
   }
 
   // Fall back to local symbol (with deduplication via registry)
-  std::string local_key = relative_path + "#" + name;
+  // Include scope in dedup key to avoid collisions between same-named vars
+  // in different functions (e.g., x inside func_a vs x inside func_b)
+  std::string local_key;
+  if (!enclosing_name.empty()) {
+    local_key = relative_path + "#" + enclosing_name + "#" + name;
+  } else {
+    local_key = relative_path + "#" + name;
+  }
   auto it = local_registry.find(local_key);
   if (it != local_registry.end()) {
     return it->second;
   }
 
-  std::string symbol_id = build_local_symbol_id(name, relative_path);
+  std::string symbol_id = build_local_symbol_id(name, relative_path, enclosing_name);
   local_registry[local_key] = symbol_id;
   return symbol_id;
 }
@@ -724,6 +749,8 @@ std::string resolve_symbol(
 //' @param tree_index_ptr External pointer (XPtr) to TreeIndex from build_tree_index_cpp()
 //' @param inside_function LogicalVector indicating which rows are inside function bodies
 //'   (pre-computed by build_tree_index() for O(1) lookup)
+//' @param enclosing_function IntegerVector of enclosing function node IDs for each row
+//'   (pre-computed by build_scope_index() for scope encoding in local symbol IDs)
 //' @param definitions_env R environment from symbol_table$definitions_env mapping
 //'   symbol name -> list(symbol_id=..., file=..., kind=..., ...)
 //' @param base_r_funcs CharacterVector of base R function names (from BASE_R_FUNCTIONS)
@@ -757,6 +784,7 @@ List resolve_symbols_cpp(
     DataFrame parse_data,
     SEXP tree_index_ptr,
     LogicalVector inside_function,
+    IntegerVector enclosing_function,
     Environment definitions_env,
     CharacterVector base_r_funcs,
     std::string relative_path,
@@ -807,6 +835,68 @@ List resolve_symbols_cpp(
     std::string tok = as<std::string>(token[i]);
     if (tok == "FUNCTION" || tok == "OP-LAMBDA") {
       func_lines.insert(line1[i]);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // STEP 2b: Build function_node_id -> function_name map
+  // -------------------------------------------------------------------------
+  // For each FUNCTION or OP-LAMBDA token, find the assigned name on the same
+  // line by looking for a SYMBOL token before the assignment operator.
+  // This enables scope encoding in local symbol IDs (2-hash IDs for locals
+  // inside named functions vs 1-hash IDs for top-level assignments).
+
+  std::unordered_map<int, std::string> function_names;
+  for (int i = 0; i < n; i++) {
+    std::string tok = as<std::string>(token[i]);
+    if (tok != "FUNCTION" && tok != "OP-LAMBDA") continue;
+
+    int func_node_id = id[i];
+    int func_line = line1[i];
+    int func_col = col1[i];
+
+    // Look for assignment on same line
+    auto ait = assignment_by_line.find(func_line);
+    if (ait == assignment_by_line.end()) continue;
+
+    // Find the leftmost assignment column on this line
+    int min_assign_col = ait->second[0];
+    for (int ac : ait->second) {
+      if (ac < min_assign_col) min_assign_col = ac;
+    }
+
+    // Skip if there's a SYMBOL_FUNCTION_CALL between the assignment and FUNCTION.
+    // This filters out cases like: result <- lapply(1:10, function(x) ...)
+    // where the FUNCTION is nested inside a call, not the direct assignment RHS.
+    bool has_call_between = false;
+    for (int j = 0; j < n; j++) {
+      if (line1[j] == func_line &&
+          as<std::string>(token[j]) == "SYMBOL_FUNCTION_CALL" &&
+          col1[j] > min_assign_col &&
+          col1[j] < func_col) {
+        has_call_between = true;
+        break;
+      }
+    }
+    if (has_call_between) continue;
+
+    // Find SYMBOL on same line, before assignment
+    std::string best_name;
+    int best_col = -1;
+    for (int j = 0; j < n; j++) {
+      if (line1[j] == func_line &&
+          as<std::string>(token[j]) == "SYMBOL" &&
+          col1[j] < min_assign_col) {
+        // Take the closest SYMBOL to the assignment (rightmost before it)
+        if (col1[j] > best_col) {
+          best_col = col1[j];
+          best_name = as<std::string>(text[j]);
+        }
+      }
+    }
+
+    if (!best_name.empty()) {
+      function_names[func_node_id] = best_name;
     }
   }
 
@@ -895,12 +985,27 @@ List resolve_symbols_cpp(
       line1, col1, assignment_by_line, func_lines
     );
 
+    // --- Look up enclosing function name for scope encoding ---
+    // For local-scope symbols, find the name of the enclosing function
+    // so the symbol ID encodes the scope (path#func#name vs path#name).
+    std::string enclosing_name;
+    if (is_local_scope &&
+        row_idx >= 0 && row_idx < enclosing_function.size() &&
+        enclosing_function[row_idx] != NA_INTEGER) {
+      int enc_func_id = enclosing_function[row_idx];
+      auto fit = function_names.find(enc_func_id);
+      if (fit != function_names.end()) {
+        enclosing_name = fit->second;
+      }
+    }
+
     // --- Resolve symbol ID ---
     std::string symbol_id = resolve_symbol(
       name, kind, is_definition, is_local_scope,
       (tok == "SYMBOL_FUNCTION_CALL"),
       relative_path, definitions_env, base_r_set,
-      local_registry, package_name, r_version
+      local_registry, package_name, r_version,
+      enclosing_name
     );
 
     // --- Deduplicate definitions ---

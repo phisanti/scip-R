@@ -55,7 +55,8 @@ build_tree_index <- function(parse_data) {
       data = parse_data,
       cpp_index = NULL,
       enclosing_function = integer(0),
-      inside_function = logical(0)
+      inside_function = logical(0),
+      function_names = new.env(hash = TRUE, parent = emptyenv())
     ))
   }
 
@@ -99,6 +100,12 @@ build_tree_index <- function(parse_data) {
   # Note: build_scope_index needs named vectors for vectorized indexing
   scope_result <- build_scope_index(parse_data, rows_vec, parent_vec)
 
+  # Pre-compute function_node_id -> assigned_name map for scope encoding.
+  # For each FUNCTION/OP-LAMBDA token, find the SYMBOL on the same line
+  # before an assignment operator. This gives e.g. FUNCTION node_id -> "my_func".
+  # Used by get_enclosing_function_name() for O(1) name lookups.
+  function_names <- build_function_name_map(parse_data)
+
   list(
     children = children,
     parent = parent,
@@ -108,7 +115,8 @@ build_tree_index <- function(parse_data) {
     data = parse_data,
     cpp_index = cpp_index,
     enclosing_function = scope_result$enclosing_function,
-    inside_function = scope_result$inside_function
+    inside_function = scope_result$inside_function,
+    function_names = function_names
   )
 }
 
@@ -317,6 +325,104 @@ get_enclosing_function_indexed <- function(node_id, index) {
     return(NA_integer_)
   }
   index$enclosing_function[row_idx]
+}
+
+#' Build a map from FUNCTION/OP-LAMBDA node IDs to their assigned names.
+#'
+#' Scans parse data for assignment patterns like `my_func <- function(...)`.
+#' For each FUNCTION or OP-LAMBDA token, finds the SYMBOL on the same line
+#' before an assignment operator to determine the function's assigned name.
+#'
+#' This map enables O(1) lookup of function names by node ID, used by
+#' get_enclosing_function_name() for scope encoding in local symbol IDs.
+#'
+#' @param parse_data Parse data data.frame from getParseData().
+#' @return Environment mapping function node ID (as character) to function name string.
+#'   Anonymous functions (no assignment found) are not included.
+#' @keywords internal
+build_function_name_map <- function(parse_data) {
+  func_names_env <- new.env(hash = TRUE, parent = emptyenv())
+
+  func_tokens <- c("FUNCTION", "OP-LAMBDA")
+  func_mask <- parse_data$token %in% func_tokens
+  if (!any(func_mask)) {
+    return(func_names_env)
+  }
+
+  # Pre-compute assignment positions: line -> list of (col, row_idx)
+  assign_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN")
+  assign_mask <- parse_data$token %in% assign_tokens
+  assign_lines <- parse_data$line1[assign_mask]
+  assign_cols <- parse_data$col1[assign_mask]
+
+  # Build line -> min assignment col lookup
+  assign_by_line <- new.env(hash = TRUE, parent = emptyenv())
+  for (i in seq_along(assign_lines)) {
+    lk <- as.character(assign_lines[i])
+    existing <- assign_by_line[[lk]]
+    if (is.null(existing) || assign_cols[i] < existing) {
+      assign_by_line[[lk]] <- assign_cols[i]
+    }
+  }
+
+  func_indices <- which(func_mask)
+  for (fi in func_indices) {
+    func_line <- parse_data$line1[fi]
+    func_id <- parse_data$id[fi]
+    func_col <- parse_data$col1[fi]
+    line_key <- as.character(func_line)
+
+    # Check if there's an assignment on this line
+    assign_col <- assign_by_line[[line_key]]
+    if (is.null(assign_col)) next
+
+    # Skip if there's a SYMBOL_FUNCTION_CALL between the assignment and FUNCTION.
+    # This filters out cases like: result <- lapply(1:10, function(x) ...)
+    # where the FUNCTION is nested inside a call, not the direct assignment RHS.
+    has_call_between <- any(
+      parse_data$line1 == func_line &
+      parse_data$token == "SYMBOL_FUNCTION_CALL" &
+      parse_data$col1 > assign_col &
+      parse_data$col1 < func_col
+    )
+    if (has_call_between) next
+
+    # Find SYMBOL on same line, before the assignment operator
+    same_line_mask <- parse_data$line1 == func_line &
+      parse_data$token == "SYMBOL" &
+      parse_data$col1 < assign_col
+    candidates <- parse_data[same_line_mask, , drop = FALSE]
+
+    if (nrow(candidates) == 0) next
+
+    # Take the closest SYMBOL to the assignment (rightmost before it)
+    best <- candidates[which.max(candidates$col1), ]
+    func_names_env[[as.character(func_id)]] <- best$text
+  }
+
+  func_names_env
+}
+
+#' Get the name of the enclosing function for a given node.
+#'
+#' Uses the pre-computed enclosing_function vector and function_names map
+#' from build_tree_index() for O(1) lookup. Returns the assigned name of
+#' the innermost enclosing function, or NULL if the node is at top-level
+#' or inside an anonymous function.
+#'
+#' @param node_id Numeric ID of the node.
+#' @param index Tree index from build_tree_index().
+#' @return Character function name, or NULL if not inside a named function.
+#' @keywords internal
+get_enclosing_function_name <- function(node_id, index) {
+  enc_func_id <- get_enclosing_function_indexed(node_id, index)
+  if (is.na(enc_func_id)) {
+    return(NULL)
+  }
+
+  # Look up the function name from the pre-computed map
+  func_name <- index$function_names[[as.character(enc_func_id)]]
+  func_name  # Returns NULL if not found (anonymous function)
 }
 
 #' Check if node has descendant of given type using DFS with early exit.
