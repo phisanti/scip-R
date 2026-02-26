@@ -453,15 +453,15 @@ build_shiny_symbol_entries <- function(ast_module, relative_path, namespace = NU
 #' @return Character symbol ID.
 #' @keywords internal
 build_shiny_symbol_id <- function(name, relative_path, namespace = NULL) {
-  base_path <- gsub("\\.R$", "", relative_path)
-  base_path <- gsub("/", "_", base_path)
-  base_path <- gsub("-", "_", base_path)
-
-  # Backtick-quote dotted R names per SCIP spec
-  esc_name <- escape_scip_identifier(name)
   if (!is.null(namespace) && nzchar(namespace)) {
-    sprintf("%s %s#%s", namespace, base_path, esc_name)
+    # For namespaced (package-exported) symbols use the package-level format
+    esc_name <- escape_scip_identifier(name)
+    sanitized_path <- gsub("[^A-Za-z0-9_/]", "_", relative_path)
+    sprintf("%s %s#%s", namespace, sanitized_path, esc_name)
   } else {
-    sprintf("local %s#%s", base_path, esc_name)
+    # For local symbols delegate to the canonical helper so the path format
+    # matches the variable symbols emitted by the main resolver — this ensures
+    # semquery can locate the symbol using the file path.
+    build_local_symbol_id(name, relative_path)
   }
 }
