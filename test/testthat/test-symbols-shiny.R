@@ -1,4 +1,14 @@
 # Tests for Shiny symbol detection module
+# BUG FIX: shiny_reactive kind serialized as Variable instead of Function
+# reactive()/reactiveVal()/reactiveValues() were emitted as SCIP kind 61 (Variable).
+# semquery find excludes Variable kind by default (ExcludeLocal=true), making all
+# Shiny reactive expressions invisible to `semquery find`.
+# Fix: serializer.R now emits shiny_reactive as kind 17 (Function), since reactives
+# are callable objects (x() retrieves the value).
+# Anti-regression tests below:
+#   - test_shiny_reactive_kind_is_function
+#   - test_reactiveVal_kind_is_function
+#   - test_reactiveValues_kind_is_function
 
 testthat::test_that("extract_shiny_symbols returns empty for non-Shiny code", {
   code <- "x <- 1\nfoo <- function(a) a + 1"
@@ -189,10 +199,71 @@ server <- function(input, output, session) {
   result <- extract_shiny_symbols(ast)
   
   testthat::expect_true(length(result) >= 3)
-  
+
   types <- sapply(result, function(x) x$type)
   testthat::expect_true("shiny_reactive" %in% types)
   testthat::expect_true("shiny_output" %in% types)
   testthat::expect_true("shiny_observer" %in% types)
+  unlink(tmp)
+})
+
+# Anti-regression: reactive() serialized as Function kind (not Variable)
+# Before fix: shiny_reactive -> Variable (61), filtered by semquery ExcludeLocal=true
+# After fix:  shiny_reactive -> Function (17), visible to semquery find
+testthat::test_that("test_shiny_reactive_kind_is_function", {
+  code <- 'server <- function(input, output, session) {\n  my_data <- reactive({ input$n * 2 })\n}'
+  tmp <- tempfile(fileext = ".R")
+  writeLines(code, tmp)
+  ast <- parse_file(list(path = tmp, relative_path = basename(tmp)))
+  workspace <- list(metadata = list(namespace = NULL), dependencies = list())
+  result <- resolve_symbols(ast, workspace, track_externals = FALSE)
+
+  reactive_sym <- Filter(function(s) !is.null(s$display_name) && s$display_name == "my_data" && s$kind == "shiny_reactive", result$symbols)
+  testthat::expect_true(length(reactive_sym) >= 1, info = "reactive() assignment must be indexed")
+  testthat::expect_equal(reactive_sym[[1]]$kind, "shiny_reactive")
+
+  # Verify SCIP serialization emits Function kind (17), not Variable (61)
+  kind_enum <- RProtoBuf::P("scip.SymbolInformation.Kind")
+  sym_info <- build_symbol_information_message(reactive_sym[[1]])
+  testthat::expect_equal(sym_info$kind, as.integer(kind_enum$Function),
+    info = "shiny_reactive must serialize to Function (17), not Variable (61)")
+  unlink(tmp)
+})
+
+testthat::test_that("test_reactiveVal_kind_is_function", {
+  code <- 'server <- function(input, output, session) {\n  counter <- reactiveVal(0)\n}'
+  tmp <- tempfile(fileext = ".R")
+  writeLines(code, tmp)
+  ast <- parse_file(list(path = tmp, relative_path = basename(tmp)))
+  workspace <- list(metadata = list(namespace = NULL), dependencies = list())
+  result <- resolve_symbols(ast, workspace, track_externals = FALSE)
+
+  reactive_sym <- Filter(function(s) !is.null(s$display_name) && s$display_name == "counter" && s$kind == "shiny_reactive", result$symbols)
+  testthat::expect_true(length(reactive_sym) >= 1, info = "reactiveVal() assignment must be indexed")
+  testthat::expect_equal(reactive_sym[[1]]$kind, "shiny_reactive")
+
+  kind_enum <- RProtoBuf::P("scip.SymbolInformation.Kind")
+  sym_info <- build_symbol_information_message(reactive_sym[[1]])
+  testthat::expect_equal(sym_info$kind, as.integer(kind_enum$Function),
+    info = "reactiveVal must serialize to Function (17), not Variable (61)")
+  unlink(tmp)
+})
+
+testthat::test_that("test_reactiveValues_kind_is_function", {
+  code <- 'server <- function(input, output, session) {\n  state <- reactiveValues(x = 1, y = 2)\n}'
+  tmp <- tempfile(fileext = ".R")
+  writeLines(code, tmp)
+  ast <- parse_file(list(path = tmp, relative_path = basename(tmp)))
+  workspace <- list(metadata = list(namespace = NULL), dependencies = list())
+  result <- resolve_symbols(ast, workspace, track_externals = FALSE)
+
+  reactive_sym <- Filter(function(s) !is.null(s$display_name) && s$display_name == "state" && s$kind == "shiny_reactive", result$symbols)
+  testthat::expect_true(length(reactive_sym) >= 1, info = "reactiveValues() assignment must be indexed")
+  testthat::expect_equal(reactive_sym[[1]]$kind, "shiny_reactive")
+
+  kind_enum <- RProtoBuf::P("scip.SymbolInformation.Kind")
+  sym_info <- build_symbol_information_message(reactive_sym[[1]])
+  testthat::expect_equal(sym_info$kind, as.integer(kind_enum$Function),
+    info = "reactiveValues must serialize to Function (17), not Variable (61)")
   unlink(tmp)
 })

@@ -247,7 +247,7 @@ build_symbol_information_message <- function(symbol_entry) {
     shiny_module_function = as.integer(kind_enum$Function), # 17
     shiny_ui = as.integer(kind_enum$Function),        # 17
     shiny_server = as.integer(kind_enum$Function),    # 17
-    shiny_reactive = as.integer(kind_enum$Variable),  # 61
+    shiny_reactive = as.integer(kind_enum$Function),  # 17 — reactives are callable (x() retrieves value)
     shiny_observer = as.integer(kind_enum$Event),     # 12
     shiny_output = as.integer(kind_enum$Property),    # 41
     shiny_namespace = as.integer(kind_enum$Namespace), # 28
