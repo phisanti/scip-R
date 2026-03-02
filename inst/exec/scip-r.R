@@ -1,7 +1,7 @@
 #!/usr/bin/env Rapp
 #| name: scip-r
 #| description: Generate SCIP index files for R projects
-#| version: 0.9.1
+#| version: 0.9.4
 #| launcher:
 #|   no-init-file: true
 
@@ -48,9 +48,17 @@ namespace <- ""
 #| description: Override project name in SCIP metadata
 project_name <- ""
 
+#| description: Print scip-r version and exit
+version <- FALSE
+
 # -----------------------------------------------------------------------------
 # Argument Processing
 # -----------------------------------------------------------------------------
+
+if (isTRUE(version)) {
+  cli::cli_text("scip-r {.val {as.character(utils::packageVersion('scipR'))}}")
+  quit(save = "no", status = 0L)
+}
 
 # Normalize paths
 root <- normalizePath(root, winslash = "/", mustWork = FALSE)

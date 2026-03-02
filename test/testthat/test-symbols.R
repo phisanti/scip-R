@@ -346,3 +346,39 @@ testthat::test_that("all three fixes work together in realistic code", {
   expect_true("process_data" %in% func_names)
   expect_true("filter_func" %in% func_names)
 })
+
+testthat::test_that("resolve_symbols emits 0-based SCIP occurrence ranges", {
+  tmp_dir <- tempfile("scip_zero_based_")
+  dir.create(tmp_dir)
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+  file_path <- file.path(tmp_dir, "positions.R")
+  writeLines(c(
+    "compute_summary <- function(data) {",
+    "  compute_summary(data)",
+    "}"
+  ), file_path)
+
+  file_info <- list(path = file_path, relative_path = "positions.R")
+  ast <- parse_file(file_info)
+  workspace <- list(metadata = list(namespace = NULL))
+  symbols <- resolve_symbols(ast, workspace)
+
+  compute_occurrences <- Filter(function(occ) {
+    grepl("compute_summary", occ$symbol, fixed = TRUE)
+  }, symbols$occurrences)
+
+  expect_gte(length(compute_occurrences), 2)
+
+  def_occ <- Find(function(occ) occ$role == "definition", compute_occurrences)
+  ref_occ <- Find(function(occ) occ$role == "reference", compute_occurrences)
+
+  expect_false(is.null(def_occ))
+  expect_false(is.null(ref_occ))
+
+  # Definition is on line 1, column 1 in R parse data => [0, 0, 0, 15] in SCIP.
+  expect_identical(def_occ$range, c(0L, 0L, 0L, 15L))
+
+  # Reference is indented by two spaces on line 2 => start column 3 (1-based).
+  expect_identical(ref_occ$range, c(1L, 2L, 1L, 17L))
+})

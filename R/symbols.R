@@ -184,7 +184,8 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
     for (occ in occurrences) {
       if (identical(occ$role, "definition")) {
         # range is c(line1, col1, line2, col2)
-        definition_lines[[occ$symbol]] <- occ$range[1]
+        # ranges are 0-based in SCIP; docs extractor expects 1-based lines
+        definition_lines[[occ$symbol]] <- occ$range[1] + 1L
       }
     }
 
@@ -326,7 +327,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
 
       occurrences[[length(occurrences) + 1]] <- list(
         symbol = symbol_id,
-        range = c(row$line1, row$col1, row$line2, row$col2),
+        range = to_scip_range(row$line1, row$col1, row$line2, row$col2),
         role = role
       )
     }
@@ -1609,8 +1610,29 @@ df_to_occurrence_list <- function(df) {
   lapply(seq_len(nrow(df)), function(i) {
     list(
       symbol = df$symbol[i],
-      range = c(df$line1[i], df$col1[i], df$line2[i], df$col2[i]),
+      range = to_scip_range(df$line1[i], df$col1[i], df$line2[i], df$col2[i]),
       role = df$role[i]
     )
   })
+}
+
+#' Convert a parse-data range (1-based) into SCIP range coordinates (0-based).
+#'
+#' R parse data uses 1-based line/column coordinates with an inclusive end
+#' column. SCIP expects 0-based line/column with an exclusive end column, so
+#' line1/col1/line2 are shifted by -1 while col2 is preserved.
+#'
+#' @param line1 Start line (1-based).
+#' @param col1 Start column (1-based).
+#' @param line2 End line (1-based).
+#' @param col2 End column (1-based inclusive).
+#' @return Integer vector `c(start_line, start_col, end_line, end_col)` for SCIP.
+#' @keywords internal
+to_scip_range <- function(line1, col1, line2, col2) {
+  c(
+    as.integer(line1) - 1L,
+    as.integer(col1) - 1L,
+    as.integer(line2) - 1L,
+    as.integer(col2)
+  )
 }
