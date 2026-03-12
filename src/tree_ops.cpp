@@ -691,8 +691,25 @@ std::string resolve_symbol(
     std::unordered_map<std::string, std::string>& local_registry,
     const std::string& package_name,
     const std::string& r_version,
-    const std::string& enclosing_name = ""
+    const std::string& enclosing_name,
+    const std::string& qualified_pkg
 ) {
+  // Explicit pkg::func() — highest priority, emit external symbol ID directly.
+  // Check definitions_env first — if qualified pkg matches our own package,
+  // use the definition's symbol_id (correct version).
+  if (!qualified_pkg.empty()) {
+    if (definitions_env.exists(name)) {
+      List def = definitions_env[name];
+      if (def.containsElementNamed("symbol_id")) {
+        std::string def_id = as<std::string>(def["symbol_id"]);
+        if (def_id.find(qualified_pkg) != std::string::npos) {
+          return def_id;
+        }
+      }
+    }
+    return build_global_symbol_id(name, qualified_pkg, "0.0.0", kind);
+  }
+
   // Local definitions (inside functions) that aren't function definitions
   // should always get local symbol IDs
   if (is_local_scope && is_definition && kind != "function") {
@@ -999,13 +1016,41 @@ List resolve_symbols_cpp(
       }
     }
 
+    // --- Detect pkg::func() qualified calls — extract package from siblings ---
+    std::string qualified_pkg;
+    if (tok == "SYMBOL_FUNCTION_CALL" || tok == "SYMBOL") {
+      auto pit = idx->parent.find(node_id);
+      if (pit != idx->parent.end()) {
+        int parent_id = pit->second;
+        auto cit = idx->children.find(parent_id);
+        if (cit != idx->children.end()) {
+          bool has_ns_get = false;
+          std::string pkg_text;
+          for (int sib_id : cit->second) {
+            auto rit = idx->row.find(sib_id);
+            if (rit != idx->row.end()) {
+              std::string sib_tok = as<std::string>(token[rit->second]);
+              if (sib_tok == "NS_GET" || sib_tok == "NS_GET_INT") {
+                has_ns_get = true;
+              } else if (sib_tok == "SYMBOL_PACKAGE") {
+                pkg_text = as<std::string>(text[rit->second]);
+              }
+            }
+          }
+          if (has_ns_get && !pkg_text.empty()) {
+            qualified_pkg = pkg_text;
+          }
+        }
+      }
+    }
+
     // --- Resolve symbol ID ---
     std::string symbol_id = resolve_symbol(
       name, kind, is_definition, is_local_scope,
       (tok == "SYMBOL_FUNCTION_CALL"),
       relative_path, definitions_env, base_r_set,
       local_registry, package_name, r_version,
-      enclosing_name
+      enclosing_name, qualified_pkg
     );
 
     // --- Deduplicate definitions ---

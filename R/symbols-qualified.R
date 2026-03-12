@@ -112,8 +112,9 @@ extract_qualified_symbols <- function(ast_module) {
       package = package_name,
       accessor = accessor,
       token = symbol_name,
+      token_type = symbol_row$token,
       range = c(symbol_row$line1, symbol_row$col1, symbol_row$line2, symbol_row$col2),
-      full_range = c(parent_row$line1[1], parent_row$col1[1], 
+      full_range = c(parent_row$line1[1], parent_row$col1[1],
                      parent_row$line2[1], parent_row$col2[1])
     )
   }

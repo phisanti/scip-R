@@ -251,6 +251,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
 
       # Determine if this is a definition
       # SYMBOL_FORMALS are always definitions (function parameters)
+      parent_id <- NA_integer_  # initialized here so qualified_pkg detection below is always safe
       if (row$token == "SYMBOL_FORMALS") {
         is_definition <- TRUE
         is_local_scope <- TRUE  # Parameters are always local to their function
@@ -293,6 +294,31 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         NULL
       }
 
+      # Detect pkg::func() or pkg:::func() qualified calls.
+      # Parse tree structure: expr -> [SYMBOL_PACKAGE "pkg", NS_GET "::", SYMBOL_FUNCTION_CALL "func"]
+      # For SYMBOL tokens (non-call qualified refs like pkg::some_var) the same parent layout applies.
+      # SYMBOL_FORMALS cannot be qualified, so we skip them.
+      qualified_pkg <- NULL
+      if (!is.na(parent_id) && row$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL")) {
+        sibling_ids <- get_children_indexed(parent_id, tree_index)
+        has_ns_get <- FALSE
+        pkg_text <- NULL
+        for (sib_id in sibling_ids) {
+          sib_row_idx <- get_row_indexed(sib_id, tree_index)
+          if (!is.na(sib_row_idx)) {
+            sib_token <- data$token[sib_row_idx]
+            if (sib_token %in% c("NS_GET", "NS_GET_INT")) {
+              has_ns_get <- TRUE
+            } else if (sib_token == "SYMBOL_PACKAGE") {
+              pkg_text <- data$text[sib_row_idx]
+            }
+          }
+        }
+        if (has_ns_get && !is.null(pkg_text)) {
+          qualified_pkg <- pkg_text
+        }
+      }
+
       # LAZY LOCAL SYMBOL CREATION: Resolve symbol with environment lookups
       symbol_id <- resolve_symbol_id_fast(
         name = name,
@@ -304,7 +330,8 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         definitions_env = definitions_env,
         local_registry = local_symbol_registry,
         local_counter_env = environment(),  # For updating local_counter
-        enclosing_name = enclosing_name
+        enclosing_name = enclosing_name,
+        qualified_pkg = qualified_pkg
       )
 
       # For definitions in this file, check if we've already seen this symbol
@@ -532,6 +559,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
             name = qual$token,
             accessor = qual$accessor,
             is_internal = (qual$accessor == ":::"),
+            kind = if (identical(qual$token_type, "SYMBOL_FUNCTION_CALL")) "function" else "variable",
             range = qual$range
           ))
         )
@@ -541,6 +569,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
           name = qual$token,
           accessor = qual$accessor,
           is_internal = (qual$accessor == ":::"),
+          kind = if (identical(qual$token_type, "SYMBOL_FUNCTION_CALL")) "function" else "variable",
           range = qual$range
         )
       }
@@ -573,8 +602,22 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
 resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
                                     is_call, relative_path, definitions_env,
                                     local_registry, local_counter_env,
-                                    enclosing_name = NULL) {
+                                    enclosing_name = NULL, qualified_pkg = NULL) {
   bench_count("phase3_resolve_fast")
+
+  # Explicit pkg::func() — highest priority; the programmer stated the package.
+  # Check definitions_env first — if the qualified package matches our own package,
+  # use the definition's symbol_id (which has the correct version).
+  if (!is.null(qualified_pkg)) {
+    bench_count("phase3_fast_qualified_pkg")
+    if (!is.null(definitions_env)) {
+      def <- definitions_env[[name]]
+      if (!is.null(def) && grepl(qualified_pkg, def$symbol_id, fixed = TRUE)) {
+        return(def$symbol_id)
+      }
+    }
+    return(build_external_symbol_id(name, qualified_pkg, "0.0.0", kind))
+  }
 
   # If no definitions_env, fall back to local symbol
   if (is.null(definitions_env)) {
