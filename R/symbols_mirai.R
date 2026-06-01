@@ -88,41 +88,146 @@ resolve_documents_mirai <- function(files, workspace, daemons = parallel::detect
   bench_end(t_setup)
   on.exit(mirai::daemons(0), add = TRUE)
 
+  # Wait briefly for daemons to actually come online. mirai::daemons(N) returns
+  # immediately after asking the dispatcher to launch N workers; if the workers
+  # never connect (segfault during init, missing libs in --vanilla env, etc.)
+  # later collect_mirai() calls block forever. Fail fast instead.
+  daemons_online <- wait_for_daemons(daemons, timeout_secs = 30)
+  if (daemons_online < 1L) {
+    cli::cli_abort(c(
+      "mirai daemons failed to come online within 30s.",
+      "i" = "Expected {.val {daemons}} workers, observed {.val {daemons_online}} online."
+    ))
+  }
+  if (daemons_online < daemons) {
+    cli::cli_alert_warning(
+      "Only {.val {daemons_online}} of {.val {daemons}} mirai daemons connected; continuing with reduced parallelism."
+    )
+  }
+
+  # Strip externalptr-bearing fields before serializing to daemons. mirai
+  # transmits args via R serialize(): plain externalptrs serialize to a
+  # placeholder that segfaults when dereferenced in the receiving process,
+  # killing the daemon silently. tree_index$cpp_index (Rcpp XPtr from
+  # build_tree_index_cpp) and every entry of symbol_table$tree_indices carry
+  # such pointers. Rebuild tree_index inside the daemon from ast$parse_data;
+  # daemons do not consult symbol_table$tree_indices.
+  symbol_table_for_dispatch <- symbol_table
+  symbol_table_for_dispatch$tree_indices <- NULL
+
   t_dispatch <- bench_start("mirai_task_dispatch", list(task_count = length(parsed_files)))
   tasks <- lapply(seq_along(parsed_files), function(i) {
     ast <- parsed_files[[i]]
     file_info <- file_infos[[i]]
-    relative_path <- file_info$relative_path %||% basename(file_info$path)
-    # Get cached tree_index from Phase 2 if available
-    tree_index <- symbol_table$tree_indices[[relative_path]]
 
     mirai::mirai(
       {
         library(scipR)
-        # OPTIMIZATION: Reuse tree_index from Phase 2
-        # OPTIMIZATION: Build tree_index once and share between resolve_symbols and map_occurrences
-        if (is.null(tree_index)) {
-          tree_index <- build_tree_index(ast$parse_data)
-        }
-        analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = symbol_table, tree_index = tree_index)
-        occurrences <- map_occurrences(analysis, ast, tree_index = tree_index)
-        document <- build_document(file_info, occurrences, analysis)
-        diagnostics <- collect_diagnostics(file_info, ast, analysis)
+        # Rebuild tree_index locally so cpp_index references daemon-side memory
+        tree_index <- scipR:::build_tree_index(ast$parse_data)
+        analysis <- scipR:::resolve_symbols(
+          ast,
+          workspace,
+          track_externals = TRUE,
+          symbol_table = symbol_table,
+          tree_index = tree_index
+        )
+        occurrences <- scipR:::map_occurrences(analysis, ast, tree_index = tree_index)
+        document <- scipR:::build_document(file_info, occurrences, analysis)
+        diagnostics <- scipR:::collect_diagnostics(file_info, ast, analysis)
         list(document = document, diagnostics = diagnostics, external_refs = analysis$external_refs)
       },
       ast = ast,
       file_info = file_info,
       workspace = workspace,
-      symbol_table = symbol_table,
-      tree_index = tree_index
+      symbol_table = symbol_table_for_dispatch
     )
   })
   bench_end(t_dispatch)
 
+  # Collect with a stall watchdog. mirai::collect_mirai() has no timeout, so a
+  # silently dead daemon (e.g. segfault from an externalptr it shouldn't have
+  # received) leaves us blocked forever. Poll until done or until no new task
+  # has completed in `stall_timeout_secs`, then abort with diagnostics.
   t_collect <- bench_start("mirai_task_collect", list(task_count = length(tasks)))
-  results <- lapply(tasks, function(task) mirai::collect_mirai(task))
+  results <- collect_with_watchdog(tasks, expected_daemons = daemons, stall_timeout_secs = 120)
   bench_end(t_collect)
+
+  mirai_errors <- vapply(results, inherits, logical(1), what = "miraiError")
+  if (any(mirai_errors)) {
+    first_error <- results[[which(mirai_errors)[1]]]
+    cli::cli_abort(c(
+      "Parallel symbol resolution failed in {.val {sum(mirai_errors)}} worker(s).",
+      "i" = conditionMessage(first_error)
+    ))
+  }
 
   bench_end(t_phase3)
   results
+}
+
+# Poll mirai::status() until at least one daemon is online or the timeout
+# elapses. Returns the number of online daemons observed.
+wait_for_daemons <- function(expected, timeout_secs = 30) {
+  deadline <- Sys.time() + timeout_secs
+  online <- 0L
+  repeat {
+    online <- mirai_online_daemons()
+    if (online >= expected) return(online)
+    if (Sys.time() >= deadline) return(online)
+    Sys.sleep(0.2)
+  }
+}
+
+# Return the number of daemons currently online, robust to mirai status()
+# returning either a matrix (dispatcher mode) or a list across versions.
+mirai_online_daemons <- function() {
+  st <- tryCatch(mirai::status(), error = function(e) NULL)
+  if (is.null(st) || is.null(st$daemons)) return(0L)
+  d <- st$daemons
+  if (is.matrix(d)) {
+    if ("online" %in% colnames(d)) return(as.integer(sum(d[, "online"] > 0)))
+    return(nrow(d))
+  }
+  if (is.character(d)) return(1L)   # single dispatcher URL, daemons unknown
+  if (is.list(d)) return(length(d))
+  0L
+}
+
+# Collect mirai task results with a no-progress watchdog. Aborts (rather than
+# blocking forever) if no task completes within `stall_timeout_secs`, with a
+# diagnostic that distinguishes "all daemons died" from "tasks just slow."
+collect_with_watchdog <- function(tasks, expected_daemons, stall_timeout_secs = 120) {
+  n <- length(tasks)
+  if (n == 0L) return(list())
+
+  last_completed <- 0L
+  last_progress_at <- Sys.time()
+
+  repeat {
+    pending <- vapply(tasks, mirai::unresolved, logical(1))
+    completed <- n - sum(pending)
+
+    if (completed > last_completed) {
+      last_completed <- completed
+      last_progress_at <- Sys.time()
+    }
+
+    if (!any(pending)) break
+
+    if (as.numeric(difftime(Sys.time(), last_progress_at, units = "secs")) > stall_timeout_secs) {
+      online <- mirai_online_daemons()
+      cli::cli_abort(c(
+        "Parallel symbol resolution stalled: no task completed in {.val {stall_timeout_secs}}s.",
+        "i" = "Online daemons: {.val {online}} of {.val {expected_daemons}}.",
+        "i" = "Completed: {.val {completed}} of {.val {n}} tasks.",
+        "i" = "This usually means a daemon segfaulted on a task arg (often a stale externalptr) and no replacement is coming.",
+        "x" = "Retry with sequential mode (--parallel=0) to confirm."
+      ))
+    }
+
+    Sys.sleep(0.5)
+  }
+
+  lapply(tasks, function(task) task$data)
 }

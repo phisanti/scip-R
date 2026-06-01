@@ -1,6 +1,6 @@
 Package: scipR
 Title: SCIP Indexer for R Workspaces
-Version: 0.9.5
+Version: 0.9.51
 Authors@R: 
     person(given = "Santiago",
            family = "Cano-Muniz",
