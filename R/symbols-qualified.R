@@ -1,4 +1,6 @@
 #' @include parser.R
+#' @include parse-tree-utils.R
+#' @include parse-lookup.R
 NULL
 
 # This module detects package-qualified symbol calls (pkg::symbol and pkg:::symbol).
@@ -67,21 +69,26 @@ extract_qualified_symbols <- function(ast_module) {
   if (nrow(ns_rows) == 0) {
     return(list())
   }
-  
+
   qualified_symbols <- list()
-  
+
+  # Build a lightweight id/parent lookup once per file so the per-NS-row
+  # `data[data$id == X, ]` / `data[data$parent == X, ]` scans below become O(1)
+  # lookups (row order preserved -> identical output).
+  lookup <- build_lookup_index(data)
+
   for (idx in seq_len(nrow(ns_rows))) {
     ns_row <- ns_rows[idx, ]
-    
+
     # Get the parent expression that contains this namespace call
     parent_id <- ns_row$parent
-    parent_row <- data[data$id == parent_id, , drop = FALSE]
-    
+    parent_row <- rows_by_id_lookup(parent_id, lookup)
+
     if (nrow(parent_row) == 0) next
-    
+
     # Get all children of this namespace expression
     # Structure: expr with children [SYMBOL_PACKAGE, NS_GET, SYMBOL_FUNCTION_CALL/SYMBOL]
-    children <- data[data$parent == parent_id, , drop = FALSE]
+    children <- rows_by_parent_lookup(parent_id, lookup)
     children <- children[order(children$col1), , drop = FALSE]
     
     # Look for SYMBOL_PACKAGE token (the package name)

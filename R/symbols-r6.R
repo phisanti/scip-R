@@ -1,5 +1,6 @@
 #' @include parser.R
 #' @include parse-tree-utils.R
+#' @include parse-lookup.R
 #' @importFrom utils head
 NULL
 
@@ -45,16 +46,21 @@ extract_r6_symbols <- function(ast_module) {
 
   r6_classes <- list()
 
+  # Build a lightweight id/parent lookup once per file to replace the repeated
+  # linear `data[data$id == X, ]` / `data[data$parent == X, ]` scans below with
+  # O(1) lookups (row order preserved -> identical output).
+  lookup <- build_lookup_index(data)
+
   for (i in seq_len(nrow(potential_r6_calls))) {
     call_row <- potential_r6_calls[i, ]
 
     # Check if this is an R6Class call (with or without namespace)
-    if (!is_r6class_call(call_row, data)) {
+    if (!is_r6class_call(call_row, data, lookup)) {
       next
     }
 
     # Extract class information
-    class_info <- extract_r6_class_info(call_row, data)
+    class_info <- extract_r6_class_info(call_row, data, lookup)
 
     if (!is.null(class_info)) {
       r6_classes[[length(r6_classes) + 1]] <- class_info
@@ -71,9 +77,10 @@ extract_r6_symbols <- function(ast_module) {
 #'
 #' @param call_row Parse data row for the SYMBOL_FUNCTION_CALL token.
 #' @param data Full parse data data.frame.
+#' @param lookup Lookup index from build_lookup_index() for O(1) child lookups.
 #' @return Logical indicating if this is an R6Class call.
 #' @keywords internal
-is_r6class_call <- function(call_row, data) {
+is_r6class_call <- function(call_row, data, lookup) {
   # Direct R6Class call (after library(R6))
   if (call_row$text == "R6Class") {
     return(TRUE)
@@ -88,7 +95,7 @@ is_r6class_call <- function(call_row, data) {
 
   # Get parent (should be expr containing the namespace call)
   parent_id <- call_row$parent
-  parent_children <- data[data$parent == parent_id, , drop = FALSE]
+  parent_children <- rows_by_parent_lookup(parent_id, lookup)
 
   # Look for namespace operators
   has_ns_operator <- any(parent_children$token %in% c("NS_GET", "NS_GET_INT"))
@@ -111,13 +118,14 @@ is_r6class_call <- function(call_row, data) {
 #'
 #' @param call_row Parse data row for the R6Class function call.
 #' @param data Full parse data data.frame.
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return List with class metadata or NULL if parsing fails.
 #' @keywords internal
-extract_r6_class_info <- function(call_row, data) {
+extract_r6_class_info <- function(call_row, data, lookup) {
   # The R6Class token's parent is the namespace expr (R6::R6Class)
   # We need the grandparent which contains the full function call with arguments
   namespace_expr_id <- call_row$parent
-  namespace_expr <- data[data$id == namespace_expr_id, , drop = FALSE]
+  namespace_expr <- rows_by_id_lookup(namespace_expr_id, lookup)
 
   if (nrow(namespace_expr) == 0) {
     return(NULL)
@@ -125,14 +133,14 @@ extract_r6_class_info <- function(call_row, data) {
 
   # Get the grandparent (the full call expression)
   full_call_id <- namespace_expr$parent[1]
-  full_call_expr <- data[data$id == full_call_id, , drop = FALSE]
+  full_call_expr <- rows_by_id_lookup(full_call_id, lookup)
 
   if (nrow(full_call_expr) == 0) {
     return(NULL)
   }
 
   # Get all descendants of the full call to find arguments
-  descendants <- get_descendants(full_call_id, data)
+  descendants <- get_descendants_lookup(full_call_id, lookup)
 
   # Extract class name (first STR_CONST argument)
   class_name <- extract_class_name_r6(descendants)
@@ -142,16 +150,16 @@ extract_r6_class_info <- function(call_row, data) {
   }
 
   # Extract inheritance information
-  inherits_from <- extract_inherit_r6(descendants, data)
+  inherits_from <- extract_inherit_r6(descendants, data, lookup)
 
   # Extract public members
-  public_members <- extract_members_r6(descendants, data, "public")
+  public_members <- extract_members_r6(descendants, data, "public", lookup)
 
   # Extract private members
-  private_members <- extract_members_r6(descendants, data, "private")
+  private_members <- extract_members_r6(descendants, data, "private", lookup)
 
   # Extract active bindings
-  active_members <- extract_members_r6(descendants, data, "active")
+  active_members <- extract_members_r6(descendants, data, "active", lookup)
 
   list(
     type = "r6_class",
@@ -193,9 +201,10 @@ extract_class_name_r6 <- function(descendants) {
 #'
 #' @param descendants Parse data subset of R6Class call.
 #' @param data Full parse data for context.
+#' @param lookup Lookup index from build_lookup_index() for O(1) child lookups.
 #' @return Character string of parent class name or NULL.
 #' @keywords internal
-extract_inherit_r6 <- function(descendants, data) {
+extract_inherit_r6 <- function(descendants, data, lookup) {
   # Look for EQ_SUB token (= in named argument)
   eq_sub_rows <- descendants[descendants$token == "EQ_SUB", , drop = FALSE]
 
@@ -209,7 +218,7 @@ extract_inherit_r6 <- function(descendants, data) {
     eq_parent <- eq_row$parent
 
     # Get siblings of the = operator
-    siblings <- data[data$parent == eq_parent, , drop = FALSE]
+    siblings <- rows_by_parent_lookup(eq_parent, lookup)
 
     # Check if left side is 'inherit' (token is SYMBOL_SUB for named arguments)
     # Need to find the SYMBOL_SUB that's IMMEDIATELY before this EQ_SUB (same line, just before)
@@ -225,7 +234,7 @@ extract_inherit_r6 <- function(descendants, data) {
 
       if (nrow(expr_right) > 0) {
         # The parent class name is a SYMBOL inside this expr
-        expr_children <- data[data$parent == expr_right$id[1], , drop = FALSE]
+        expr_children <- rows_by_parent_lookup(expr_right$id[1], lookup)
         symbol_rows <- expr_children[expr_children$token == "SYMBOL", , drop = FALSE]
 
         if (nrow(symbol_rows) > 0) {
@@ -246,9 +255,10 @@ extract_inherit_r6 <- function(descendants, data) {
 #' @param descendants Parse data subset of R6Class call.
 #' @param data Full parse data for context.
 #' @param member_type Character: "public", "private", or "active".
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return List of member info (name, is_method) or NULL.
 #' @keywords internal
-extract_members_r6 <- function(descendants, data, member_type) {
+extract_members_r6 <- function(descendants, data, member_type, lookup) {
   # Look for EQ_SUB token followed by member_type SYMBOL
   eq_sub_rows <- descendants[descendants$token == "EQ_SUB", , drop = FALSE]
 
@@ -262,7 +272,7 @@ extract_members_r6 <- function(descendants, data, member_type) {
     eq_parent <- eq_row$parent
 
     # Get siblings
-    siblings <- data[data$parent == eq_parent, , drop = FALSE]
+    siblings <- rows_by_parent_lookup(eq_parent, lookup)
 
     # Check if left side matches member_type
     token_mask <- siblings$token %in% c("SYMBOL", "SYMBOL_SUB")
@@ -286,7 +296,7 @@ extract_members_r6 <- function(descendants, data, member_type) {
 
       if (nrow(expr_right) > 0) {
         expr_right <- expr_right[order(expr_right$line1, expr_right$col1), , drop = FALSE]
-        list_descendants <- get_descendants(expr_right$id[1], data)
+        list_descendants <- get_descendants_lookup(expr_right$id[1], lookup)
 
         # Extract member info from the list (name + is_method)
         members <- list()
@@ -299,7 +309,7 @@ extract_members_r6 <- function(descendants, data, member_type) {
           eq_assign_parent <- eq_assign_row$parent
 
           # Get siblings of this assignment
-          eq_assign_siblings <- data[data$parent == eq_assign_parent, , drop = FALSE]
+          eq_assign_siblings <- rows_by_parent_lookup(eq_assign_parent, lookup)
 
           # Get left-hand side symbol (member name)
           lhs_mask <- eq_assign_siblings$token %in% c("SYMBOL", "SYMBOL_SUB")
@@ -321,7 +331,7 @@ extract_members_r6 <- function(descendants, data, member_type) {
             is_method <- FALSE
             if (nrow(rhs_expr) > 0) {
               rhs_expr <- rhs_expr[order(rhs_expr$line1, rhs_expr$col1), , drop = FALSE]
-              rhs_descendants <- get_descendants(rhs_expr$id[1], data)
+              rhs_descendants <- get_descendants_lookup(rhs_expr$id[1], lookup)
               is_method <- any(rhs_descendants$token == "FUNCTION")
             }
 
