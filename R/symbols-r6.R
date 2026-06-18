@@ -172,9 +172,6 @@ extract_r6_class_info <- function(call_row, data, lookup) {
   )
 }
 
-# Note: get_descendants() is now imported from parse-tree-utils.R
-# (formerly get_descendants_r6, now unified across all modules)
-
 #' Extract class name from R6Class call arguments.
 #'
 #' The class name is the first string literal argument to R6Class().

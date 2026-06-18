@@ -42,32 +42,43 @@ extract_shiny_symbols <- function(ast_module) {
   observer_functions <- c("observe", "observeEvent", "eventReactive")
   render_pattern <- "^render"
 
+  # Build a lightweight id/parent lookup once per file, but ONLY when the file
+  # contains a per-call shiny construct that needs it (module/reactive/observer/
+  # render/NS). The per-call extractors below are the only lookup consumers;
+  # extract_module_definitions() uses no lookup. Skipping the build on files
+  # with no such calls avoids per-file index overhead (identical output).
+  call_needs_lookup <- func_calls$text %in%
+    c(module_functions, reactive_functions, observer_functions) |
+    grepl(render_pattern, func_calls$text) |
+    func_calls$text == "NS"
+  lookup <- if (any(call_needs_lookup)) build_lookup_index(data) else NULL
+
   for (i in seq_len(nrow(func_calls))) {
     call_row <- func_calls[i, ]
     call_text <- call_row$text
 
     if (call_text %in% module_functions) {
-      module_info <- extract_module_info(call_row, data)
+      module_info <- extract_module_info(call_row, data, lookup)
       if (!is.null(module_info)) {
         shiny_symbols[[length(shiny_symbols) + 1]] <- module_info
       }
     } else if (call_text %in% reactive_functions) {
-      reactive_info <- extract_reactive_info(call_row, data, call_text)
+      reactive_info <- extract_reactive_info(call_row, data, call_text, lookup)
       if (!is.null(reactive_info)) {
         shiny_symbols[[length(shiny_symbols) + 1]] <- reactive_info
       }
     } else if (call_text %in% observer_functions) {
-      observer_info <- extract_observer_info(call_row, data, call_text)
+      observer_info <- extract_observer_info(call_row, data, call_text, lookup)
       if (!is.null(observer_info)) {
         shiny_symbols[[length(shiny_symbols) + 1]] <- observer_info
       }
     } else if (grepl(render_pattern, call_text)) {
-      output_info <- extract_render_info(call_row, data, call_text)
+      output_info <- extract_render_info(call_row, data, call_text, lookup)
       if (!is.null(output_info)) {
         shiny_symbols[[length(shiny_symbols) + 1]] <- output_info
       }
     } else if (call_text == "NS") {
-      ns_info <- extract_ns_info(call_row, data)
+      ns_info <- extract_ns_info(call_row, data, lookup)
       if (!is.null(ns_info)) {
         shiny_symbols[[length(shiny_symbols) + 1]] <- ns_info
       }
@@ -84,17 +95,18 @@ extract_shiny_symbols <- function(ast_module) {
 #'
 #' @param call_row Parse data row for the function call.
 #' @param data Full parse data data.frame.
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return List with module metadata or NULL if parsing fails.
 #' @keywords internal
-extract_module_info <- function(call_row, data) {
+extract_module_info <- function(call_row, data, lookup) {
   call_expr_id <- call_row$parent
-  full_call_id <- data[data$id == call_expr_id, ]$parent[1]
+  full_call_id <- rows_by_id_lookup(call_expr_id, lookup)$parent[1]
 
   if (is.na(full_call_id)) {
     return(NULL)
   }
 
-  descendants <- get_descendants(full_call_id, data)
+  descendants <- get_descendants_lookup(full_call_id, lookup)
 
   str_const_rows <- descendants[descendants$token == "STR_CONST", , drop = FALSE]
   module_id <- if (nrow(str_const_rows) > 0) {
@@ -108,7 +120,7 @@ extract_module_info <- function(call_row, data) {
     }
   }
 
-  assigned_name <- find_assigned_name(full_call_id, data)
+  assigned_name <- find_assigned_name(full_call_id, data, lookup)
 
   list(
     type = "shiny_module",
@@ -124,17 +136,18 @@ extract_module_info <- function(call_row, data) {
 #' @param call_row Parse data row for the function call.
 #' @param data Full parse data data.frame.
 #' @param call_text The function name (reactiveVal, reactiveValues, etc.).
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return List with reactive metadata or NULL.
 #' @keywords internal
-extract_reactive_info <- function(call_row, data, call_text) {
+extract_reactive_info <- function(call_row, data, call_text, lookup) {
   call_expr_id <- call_row$parent
-  full_call_id <- data[data$id == call_expr_id, ]$parent[1]
+  full_call_id <- rows_by_id_lookup(call_expr_id, lookup)$parent[1]
 
   if (is.na(full_call_id)) {
     full_call_id <- call_expr_id
   }
 
-  assigned_name <- find_assigned_name(full_call_id, data)
+  assigned_name <- find_assigned_name(full_call_id, data, lookup)
 
   list(
     type = "shiny_reactive",
@@ -149,17 +162,18 @@ extract_reactive_info <- function(call_row, data, call_text) {
 #' @param call_row Parse data row for the function call.
 #' @param data Full parse data data.frame.
 #' @param call_text The function name (observe, observeEvent, etc.).
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return List with observer metadata or NULL.
 #' @keywords internal
-extract_observer_info <- function(call_row, data, call_text) {
+extract_observer_info <- function(call_row, data, call_text, lookup) {
   call_expr_id <- call_row$parent
-  full_call_id <- data[data$id == call_expr_id, ]$parent[1]
+  full_call_id <- rows_by_id_lookup(call_expr_id, lookup)$parent[1]
 
   if (is.na(full_call_id)) {
     full_call_id <- call_expr_id
   }
 
-  assigned_name <- find_assigned_name(full_call_id, data)
+  assigned_name <- find_assigned_name(full_call_id, data, lookup)
 
   list(
     type = "shiny_observer",
@@ -174,17 +188,18 @@ extract_observer_info <- function(call_row, data, call_text) {
 #' @param call_row Parse data row for the function call.
 #' @param data Full parse data data.frame.
 #' @param call_text The function name (renderPlot, renderTable, etc.).
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return List with output metadata or NULL.
 #' @keywords internal
-extract_render_info <- function(call_row, data, call_text) {
+extract_render_info <- function(call_row, data, call_text, lookup) {
   call_expr_id <- call_row$parent
-  full_call_id <- data[data$id == call_expr_id, ]$parent[1]
+  full_call_id <- rows_by_id_lookup(call_expr_id, lookup)$parent[1]
 
   if (is.na(full_call_id)) {
     full_call_id <- call_expr_id
   }
 
-  output_name <- find_output_assignment(full_call_id, data)
+  output_name <- find_output_assignment(full_call_id, data, lookup)
 
   list(
     type = "shiny_output",
@@ -198,17 +213,18 @@ extract_render_info <- function(call_row, data, call_text) {
 #'
 #' @param call_row Parse data row for the NS function call.
 #' @param data Full parse data data.frame.
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return List with namespace metadata or NULL.
 #' @keywords internal
-extract_ns_info <- function(call_row, data) {
+extract_ns_info <- function(call_row, data, lookup) {
   call_expr_id <- call_row$parent
-  full_call_id <- data[data$id == call_expr_id, ]$parent[1]
+  full_call_id <- rows_by_id_lookup(call_expr_id, lookup)$parent[1]
 
   if (is.na(full_call_id)) {
     full_call_id <- call_expr_id
   }
 
-  descendants <- get_descendants(full_call_id, data)
+  descendants <- get_descendants_lookup(full_call_id, lookup)
 
   str_const_rows <- descendants[descendants$token == "STR_CONST", , drop = FALSE]
   ns_id <- if (nrow(str_const_rows) > 0) {
@@ -277,23 +293,24 @@ extract_module_definitions <- function(data) {
 #'
 #' @param expr_id ID of the expression node.
 #' @param data Full parse data data.frame.
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return Character name or NULL.
 #' @keywords internal
-find_assigned_name <- function(expr_id, data) {
+find_assigned_name <- function(expr_id, data, lookup) {
   assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
 
   current_id <- expr_id
   max_levels <- 10
 
   for (level in seq_len(max_levels)) {
-    current_row <- data[data$id == current_id, , drop = FALSE]
+    current_row <- rows_by_id_lookup(current_id, lookup)
     if (nrow(current_row) == 0) break
 
     parent_id <- current_row$parent[1]
     if (is.na(parent_id) || parent_id == 0) {
-      siblings <- data[data$parent == current_id, , drop = FALSE]
+      siblings <- rows_by_parent_lookup(current_id, lookup)
     } else {
-      siblings <- data[data$parent == parent_id, , drop = FALSE]
+      siblings <- rows_by_parent_lookup(parent_id, lookup)
     }
 
     assign_rows <- siblings[siblings$token %in% assignment_tokens, , drop = FALSE]
@@ -326,20 +343,21 @@ find_assigned_name <- function(expr_id, data) {
 #'
 #' @param expr_id ID of the expression node.
 #' @param data Full parse data data.frame.
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return Character output name or NULL.
 #' @keywords internal
-find_output_assignment <- function(expr_id, data) {
+find_output_assignment <- function(expr_id, data, lookup) {
   current_id <- expr_id
   max_levels <- 5
 
   for (level in seq_len(max_levels)) {
-    current_row <- data[data$id == current_id, , drop = FALSE]
+    current_row <- rows_by_id_lookup(current_id, lookup)
     if (nrow(current_row) == 0) break
 
     parent_id <- current_row$parent[1]
     if (is.na(parent_id) || parent_id == 0) break
 
-    siblings <- data[data$parent == parent_id, , drop = FALSE]
+    siblings <- rows_by_parent_lookup(parent_id, lookup)
 
     dollar_rows <- siblings[siblings$token == "'$'", , drop = FALSE]
     if (nrow(dollar_rows) > 0) {

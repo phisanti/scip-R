@@ -555,47 +555,6 @@ get_descendants_indexed <- function(node_id, index) {
   index$data[row_indices, , drop = FALSE]
 }
 
-#' Get all descendant nodes recursively.
-#'
-#' Collects all child nodes and their descendants using iterative traversal.
-#' Uses list accumulation + single rbind to avoid O(n^2) memory allocation.
-#'
-#' @param node_id Numeric ID of the starting node.
-#' @param parse_data Parse data data.frame from getParseData().
-#' @return Data.frame subset containing all descendants.
-#' @keywords internal
-#' @examples
-#' \dontrun{
-#' data <- getParseData(parse("script.R", keep.source = TRUE))
-#' descendants <- get_descendants(5, data)
-#' }
-get_descendants <- function(node_id, parse_data) {
-  # Use iterative BFS with list accumulation to avoid O(n^2) rbind
-  result_list <- list()
-  stack <- list(node_id)
-
-  while (length(stack) > 0) {
-    current_id <- stack[[1]]
-    stack <- stack[-1]
-
-    children <- parse_data[parse_data$parent == current_id, , drop = FALSE]
-    if (nrow(children) > 0) {
-      result_list[[length(result_list) + 1]] <- children
-      # Add child IDs to stack for further traversal
-      for (cid in children$id) {
-        stack[[length(stack) + 1]] <- cid
-      }
-    }
-  }
-
-  if (length(result_list) == 0) {
-    return(parse_data[integer(0), , drop = FALSE])
-  }
-
-  # Single rbind at the end - O(n) instead of O(n^2)
-  do.call(rbind, result_list)
-}
-
 #' Find first ancestor of a given token type using pre-computed index (O(depth)).
 #'
 #' @param node_id Numeric ID of the starting node.

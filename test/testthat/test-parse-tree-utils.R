@@ -5,7 +5,10 @@
 # Level 1: Basic Tree Navigation
 # ============================================================================
 
-test_that("get_descendants returns all descendants recursively", {
+test_that("get_descendants_lookup returns all descendants recursively", {
+  # Migrated from the deleted legacy get_descendants() walker to its
+  # order-preserving O(1)-lookup replacement (get_descendants_lookup); the
+  # lookup variant reproduces the legacy BFS row order exactly.
   tmp_dir <- tempfile("scip_tree_descendants_")
   dir.create(tmp_dir)
   on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
@@ -24,7 +27,7 @@ test_that("get_descendants returns all descendants recursively", {
   expect_gt(nrow(root_exprs), 0)
 
   # Get all descendants
-  descendants <- get_descendants(root_exprs$id[1], data)
+  descendants <- get_descendants_lookup(root_exprs$id[1], build_lookup_index(data))
 
   # Should include FUNCTION token (deeply nested)
   func_tokens <- descendants[descendants$token == "FUNCTION", , drop = FALSE]
@@ -175,7 +178,7 @@ test_that("handles empty parse data gracefully", {
 
   # All lookups should return empty/NA/FALSE without error
   expect_length(get_children_indexed(1, index), 0)
-  expect_equal(nrow(get_descendants(1, empty_data)), 0)
+  expect_equal(nrow(get_descendants_lookup(1, build_lookup_index(empty_data))), 0)
   expect_true(is.na(get_parent_id_indexed(1, index)))
   expect_equal(nrow(find_ancestor_of_type_indexed(1, "SYMBOL", index)), 0)
   expect_false(has_descendant_of_type_indexed(1, "SYMBOL", index))
@@ -199,7 +202,7 @@ test_that("handles invalid node IDs gracefully", {
   invalid_id <- 999999
 
   expect_length(get_children_indexed(invalid_id, index), 0)
-  expect_equal(nrow(get_descendants(invalid_id, data)), 0)
+  expect_equal(nrow(get_descendants_lookup(invalid_id, build_lookup_index(data))), 0)
   expect_true(is.na(get_parent_id_indexed(invalid_id, index)))
   expect_equal(nrow(find_ancestor_of_type_indexed(invalid_id, "SYMBOL", index)), 0)
   expect_false(has_descendant_of_type_indexed(invalid_id, "SYMBOL", index))
@@ -231,7 +234,7 @@ test_that("handles deeply nested structures", {
 
   if (nrow(symbols_c) > 0) {
     # Should be able to traverse up through multiple FUNCTION ancestors
-    descendants <- get_descendants(0, data)  # Get all from root
+    descendants <- get_descendants_lookup(0, build_lookup_index(data))  # Get all from root
 
     # Should contain multiple FUNCTION tokens
     func_tokens <- descendants[descendants$token == "FUNCTION", , drop = FALSE]

@@ -33,22 +33,35 @@ extract_s4_symbols <- function(ast_module) {
     return(list())
   }
 
+  # FAST PATH: bail before building any index if the file has no S4 calls at
+  # all (the common case outside Bioconductor-style code). Equivalent to the
+  # loop below finding nothing, but avoids the per-file lookup build.
+  s4_calls <- c("setClass", "setGeneric", "setMethod")
+  if (!any(func_calls$text %in% s4_calls)) {
+    return(list())
+  }
+
+  # Build a lightweight id/parent lookup once per file so the per-call
+  # `data[data$id == X, ]` / `data[data$parent == X, ]` / get_descendants()
+  # scans below become O(1) / order-preserving lookups (identical output).
+  lookup <- build_lookup_index(data)
+
   for (i in seq_len(nrow(func_calls))) {
     call_row <- func_calls[i, ]
     call_text <- call_row$text
 
     if (call_text == "setClass") {
-      class_info <- extract_setclass_info(call_row, data)
+      class_info <- extract_setclass_info(call_row, data, lookup)
       if (!is.null(class_info)) {
         s4_symbols[[length(s4_symbols) + 1]] <- class_info
       }
     } else if (call_text == "setGeneric") {
-      generic_info <- extract_setgeneric_info(call_row, data)
+      generic_info <- extract_setgeneric_info(call_row, data, lookup)
       if (!is.null(generic_info)) {
         s4_symbols[[length(s4_symbols) + 1]] <- generic_info
       }
     } else if (call_text == "setMethod") {
-      method_info <- extract_setmethod_info(call_row, data)
+      method_info <- extract_setmethod_info(call_row, data, lookup)
       if (!is.null(method_info)) {
         s4_symbols[[length(s4_symbols) + 1]] <- method_info
       }
@@ -62,18 +75,19 @@ extract_s4_symbols <- function(ast_module) {
 #'
 #' @param call_row Parse data row for the setClass function call.
 #' @param data Full parse data data.frame.
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return List with class metadata or NULL if parsing fails.
 #' @keywords internal
-extract_setclass_info <- function(call_row, data) {
+extract_setclass_info <- function(call_row, data, lookup) {
   call_expr_id <- call_row$parent
-  call_expr <- data[data$id == call_expr_id, , drop = FALSE]
+  call_expr <- rows_by_id_lookup(call_expr_id, lookup)
 
   if (nrow(call_expr) == 0) {
     return(NULL)
   }
 
   full_call_id <- call_expr$parent[1]
-  descendants <- get_descendants(full_call_id, data)
+  descendants <- get_descendants_lookup(full_call_id, lookup)
 
   class_name <- extract_first_string_arg(descendants)
 
@@ -81,12 +95,12 @@ extract_setclass_info <- function(call_row, data) {
     return(NULL)
   }
 
-  slots <- extract_named_list_arg(descendants, data, "slots")
+  slots <- extract_named_list_arg(descendants, data, "slots", lookup)
   if (is.null(slots)) {
-    slots <- extract_named_list_arg(descendants, data, "representation")
+    slots <- extract_named_list_arg(descendants, data, "representation", lookup)
   }
 
-  contains <- extract_string_vector_arg(descendants, data, "contains")
+  contains <- extract_string_vector_arg(descendants, data, "contains", lookup)
 
   list(
     type = "s4_class",
@@ -101,18 +115,19 @@ extract_setclass_info <- function(call_row, data) {
 #'
 #' @param call_row Parse data row for the setGeneric function call.
 #' @param data Full parse data data.frame.
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return List with generic metadata or NULL if parsing fails.
 #' @keywords internal
-extract_setgeneric_info <- function(call_row, data) {
+extract_setgeneric_info <- function(call_row, data, lookup) {
   call_expr_id <- call_row$parent
-  call_expr <- data[data$id == call_expr_id, , drop = FALSE]
+  call_expr <- rows_by_id_lookup(call_expr_id, lookup)
 
   if (nrow(call_expr) == 0) {
     return(NULL)
   }
 
   full_call_id <- call_expr$parent[1]
-  descendants <- get_descendants(full_call_id, data)
+  descendants <- get_descendants_lookup(full_call_id, lookup)
 
   generic_name <- extract_first_string_arg(descendants)
 
@@ -131,18 +146,19 @@ extract_setgeneric_info <- function(call_row, data) {
 #'
 #' @param call_row Parse data row for the setMethod function call.
 #' @param data Full parse data data.frame.
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return List with method metadata or NULL if parsing fails.
 #' @keywords internal
-extract_setmethod_info <- function(call_row, data) {
+extract_setmethod_info <- function(call_row, data, lookup) {
   call_expr_id <- call_row$parent
-  call_expr <- data[data$id == call_expr_id, , drop = FALSE]
+  call_expr <- rows_by_id_lookup(call_expr_id, lookup)
 
   if (nrow(call_expr) == 0) {
     return(NULL)
   }
 
   full_call_id <- call_expr$parent[1]
-  descendants <- get_descendants(full_call_id, data)
+  descendants <- get_descendants_lookup(full_call_id, lookup)
 
   str_const_rows <- descendants[descendants$token == "STR_CONST", , drop = FALSE]
   str_const_rows <- str_const_rows[order(str_const_rows$line1, str_const_rows$col1), , drop = FALSE]
@@ -188,9 +204,10 @@ extract_first_string_arg <- function(descendants) {
 #' @param descendants Parse data subset.
 #' @param data Full parse data.
 #' @param arg_name Name of the argument to extract.
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return Character vector of slot/member names or NULL.
 #' @keywords internal
-extract_named_list_arg <- function(descendants, data, arg_name) {
+extract_named_list_arg <- function(descendants, data, arg_name, lookup) {
   eq_sub_rows <- descendants[descendants$token == "EQ_SUB", , drop = FALSE]
 
   if (nrow(eq_sub_rows) == 0) {
@@ -201,7 +218,7 @@ extract_named_list_arg <- function(descendants, data, arg_name) {
     eq_row <- eq_sub_rows[i, ]
     eq_parent <- eq_row$parent
 
-    siblings <- data[data$parent == eq_parent, , drop = FALSE]
+    siblings <- rows_by_parent_lookup(eq_parent, lookup)
 
     symbol_left <- siblings[siblings$token == "SYMBOL_SUB" &
                             siblings$line1 == eq_row$line1 &
@@ -213,14 +230,14 @@ extract_named_list_arg <- function(descendants, data, arg_name) {
                              siblings$col1 > eq_row$col1, , drop = FALSE]
 
       if (nrow(expr_right) > 0) {
-        list_descendants <- get_descendants(expr_right$id[1], data)
+        list_descendants <- get_descendants_lookup(expr_right$id[1], lookup)
 
         slot_names <- character()
         inner_eq <- list_descendants[list_descendants$token == "EQ_SUB", , drop = FALSE]
 
         for (j in seq_len(nrow(inner_eq))) {
           inner_eq_row <- inner_eq[j, ]
-          inner_siblings <- data[data$parent == inner_eq_row$parent, , drop = FALSE]
+          inner_siblings <- rows_by_parent_lookup(inner_eq_row$parent, lookup)
 
           slot_symbol <- inner_siblings[inner_siblings$token %in% c("SYMBOL", "SYMBOL_SUB") &
                                         inner_siblings$col1 < inner_eq_row$col1, , drop = FALSE]
@@ -245,9 +262,10 @@ extract_named_list_arg <- function(descendants, data, arg_name) {
 #' @param descendants Parse data subset.
 #' @param data Full parse data.
 #' @param arg_name Name of the argument to extract.
+#' @param lookup Lookup index from build_lookup_index() for O(1) lookups.
 #' @return Character vector of values or NULL.
 #' @keywords internal
-extract_string_vector_arg <- function(descendants, data, arg_name) {
+extract_string_vector_arg <- function(descendants, data, arg_name, lookup) {
   eq_sub_rows <- descendants[descendants$token == "EQ_SUB", , drop = FALSE]
 
   if (nrow(eq_sub_rows) == 0) {
@@ -258,7 +276,7 @@ extract_string_vector_arg <- function(descendants, data, arg_name) {
     eq_row <- eq_sub_rows[i, ]
     eq_parent <- eq_row$parent
 
-    siblings <- data[data$parent == eq_parent, , drop = FALSE]
+    siblings <- rows_by_parent_lookup(eq_parent, lookup)
 
     symbol_left <- siblings[siblings$token == "SYMBOL_SUB" &
                             siblings$line1 == eq_row$line1 &
@@ -269,7 +287,7 @@ extract_string_vector_arg <- function(descendants, data, arg_name) {
                              siblings$col1 > eq_row$col1, , drop = FALSE]
 
       if (nrow(expr_right) > 0) {
-        list_descendants <- get_descendants(expr_right$id[1], data)
+        list_descendants <- get_descendants_lookup(expr_right$id[1], lookup)
 
         str_rows <- list_descendants[list_descendants$token == "STR_CONST", , drop = FALSE]
         if (nrow(str_rows) > 0) {

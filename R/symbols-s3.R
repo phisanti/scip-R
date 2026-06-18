@@ -13,13 +13,14 @@ NULL
 #'
 #' @param func_id Numeric ID of the FUNCTION token in parse data.
 #' @param data Parse data data.frame from getParseData().
+#' @param lookup Lookup index from build_lookup_index() for O(1) id/parent lookups.
 #' @param index Optional tree index from build_tree_index() for O(1) lookups.
 #' @return List with is_generic (logical) and generic_name (character) if detected.
 #' @keywords internal
-detect_s3_generic <- function(func_id, data, index = NULL) {
+detect_s3_generic <- function(func_id, data, lookup, index = NULL) {
   # The FUNCTION token's parent is an expr containing the entire function definition
   # The function body is a sibling expr node (with same parent)
-  func_row <- data[data$id == func_id, , drop = FALSE]
+  func_row <- rows_by_id_lookup(func_id, lookup)
   if (nrow(func_row) == 0) {
     return(list(is_generic = FALSE, generic_name = NULL))
   }
@@ -27,7 +28,7 @@ detect_s3_generic <- function(func_id, data, index = NULL) {
   func_parent <- func_row$parent[1]
 
   # Get all siblings of FUNCTION (nodes with same parent)
-  siblings <- data[data$parent == func_parent, , drop = FALSE]
+  siblings <- rows_by_parent_lookup(func_parent, lookup)
 
   # The function body is typically the last expr sibling after the closing ')'
   body_exprs <- siblings[siblings$token == "expr", , drop = FALSE]
@@ -48,10 +49,10 @@ detect_s3_generic <- function(func_id, data, index = NULL) {
       data[integer(0), , drop = FALSE]
     }
   } else {
-    # Fallback to legacy get_descendants (already fixed to use list accumulation)
+    # Fallback to the order-preserving lookup traversal (legacy BFS order).
     descendant_list <- list()
     for (body_id in body_exprs$id) {
-      descendants <- get_descendants(body_id, data)
+      descendants <- get_descendants_lookup(body_id, lookup)
       if (nrow(descendants) > 0) {
         descendant_list[[length(descendant_list) + 1]] <- descendants
       }
@@ -73,7 +74,7 @@ detect_s3_generic <- function(func_id, data, index = NULL) {
 
   # Find the parent expr of UseMethod to get the argument
   usemethod_parent <- usemethod_rows$parent[1]
-  parent_children <- data[data$parent == usemethod_parent, , drop = FALSE]
+  parent_children <- rows_by_parent_lookup(usemethod_parent, lookup)
 
   # Look for STR_CONST (string literal) which is the generic name argument
   str_const_rows <- parent_children[parent_children$token == "STR_CONST", , drop = FALSE]
@@ -88,8 +89,6 @@ detect_s3_generic <- function(func_id, data, index = NULL) {
 
   list(is_generic = TRUE, generic_name = generic_name)
 }
-
-# Note: get_descendants() is now imported from parse-tree-utils.R
 
 #' Parse S3 method name to extract generic and class.
 #'
@@ -170,8 +169,12 @@ extract_s3_symbols <- function(ast_module) {
   usemethod_rows <- data[data$token == "SYMBOL_FUNCTION_CALL" & data$text == "UseMethod", , drop = FALSE]
   has_usemethod <- nrow(usemethod_rows) > 0
 
-  # Build tree index only if we need it (for generic detection)
+  # Build tree index + lookup only when this file actually has a generic to
+  # detect (UseMethod present). The lookup feeds detect_s3_generic's O(1) scans;
+  # building it for every file would add net overhead on S3-light files (the
+  # main loop's single id scan below is cheap and not worth indexing).
   tree_index <- if (has_usemethod) build_tree_index(data) else NULL
+  lookup <- if (has_usemethod) build_lookup_index(data) else NULL
 
   s3_symbols <- list()
 
@@ -208,7 +211,7 @@ extract_s3_symbols <- function(ast_module) {
     # Check if this is an S3 generic (contains UseMethod)
     # Only do expensive check if file has UseMethod calls
     if (has_usemethod) {
-      generic_info <- detect_s3_generic(func_id, data, tree_index)
+      generic_info <- detect_s3_generic(func_id, data, lookup, tree_index)
 
       if (generic_info$is_generic) {
         # Determine the generic name
