@@ -288,8 +288,54 @@ parse_gitignore_line <- function(line) {
 #' @return Anchored regular expression string.
 #' @keywords internal
 glob_to_regex <- function(pattern) {
-  if (!nzchar(pattern)) return("^.*$")
-  utils::glob2rx(pattern, trim.head = FALSE, trim.tail = FALSE)
+  if (!nzchar(pattern)) {
+    return("^.*$")
+  }
+
+  chars <- strsplit(pattern, "", fixed = TRUE)[[1]]
+  out <- "^"
+  i <- 1L
+  n <- length(chars)
+  regex_meta <- c("\\", ".", "(", ")", "[", "]", "{", "}", "+", "^", "$", "|")
+
+  while (i <= n) {
+    ch <- chars[i]
+
+    if (ch == "*") {
+      # "**/" should match zero or more directory segments, so patterns like
+      # "R/**/*.R" also match top-level files such as "R/foo.R".
+      if ((i + 1L) <= n && chars[i + 1L] == "*") {
+        i <- i + 2L
+        if (i <= n && chars[i] == "/") {
+          out <- paste0(out, "(?:[^/]+/)*")
+          i <- i + 1L
+        } else {
+          out <- paste0(out, ".*")
+        }
+        next
+      }
+
+      out <- paste0(out, "[^/]*")
+      i <- i + 1L
+      next
+    }
+
+    if (ch == "?") {
+      out <- paste0(out, "[^/]")
+      i <- i + 1L
+      next
+    }
+
+    if (ch %in% regex_meta) {
+      out <- paste0(out, "\\", ch)
+    } else {
+      out <- paste0(out, ch)
+    }
+
+    i <- i + 1L
+  }
+
+  paste0(out, "$")
 }
 
 # Legacy alias for backwards compatibility
