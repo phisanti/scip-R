@@ -10,6 +10,7 @@
 #' @include symbols-s4.R
 #' @include symbols-r6.R
 #' @include symbols-shiny.R
+#' @include symbols-plumber.R
 #' @include symbols-dispatch.R
 #' @include symbols-closures.R
 #' @include symbols-serialize.R
@@ -464,6 +465,23 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   if (length(shiny_symbols) > 0) {
     for (shiny_sym in shiny_symbols) {
       symbols[[length(symbols) + 1]] <- shiny_sym
+    }
+  }
+
+  # Extract plumber REST route handlers (anonymous function() after #* @get/...)
+  # Unlike the builders above, plumber handlers are anonymous so the main pass
+  # emits no occurrence for them — this builder supplies BOTH the symbol entry
+  # and its definition occurrence, so both lists must be extended.
+  t_plumber <- bench_start("extract_plumber_symbols")
+  plumber_entries <- build_plumber_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
+  bench_end(t_plumber, list(plumber_count = length(plumber_entries$symbols)))
+
+  if (length(plumber_entries$symbols) > 0) {
+    for (plumber_sym in plumber_entries$symbols) {
+      symbols[[length(symbols) + 1]] <- plumber_sym
+    }
+    for (plumber_occ in plumber_entries$occurrences) {
+      occurrences[[length(occurrences) + 1]] <- plumber_occ
     }
   }
 

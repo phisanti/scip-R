@@ -1,6 +1,6 @@
 Package: scipR
 Title: SCIP Indexer for R Workspaces
-Version: 0.9.53
+Version: 0.9.54
 Authors@R: 
     person(given = "Santiago",
            family = "Cano-Muniz",
@@ -37,16 +37,17 @@ Collate:
     'parser.R'
     'documentation.R'
     'parse-tree-utils.R'
+    'symbols-serialize.R'
     'parse-lookup.R'
+    'symbols-closures.R'
+    'symbol-table.R'
+    'symbols-dispatch.R'
+    'symbols-plumber.R'
     'symbols-shiny.R'
     'symbols-r6.R'
     'symbols-s4.R'
     'symbols-s3.R'
     'symbols-qualified.R'
-    'symbol-table.R'
-    'symbols-dispatch.R'
-    'symbols-closures.R'
-    'symbols-serialize.R'
     'symbols.R'
     'occurrences.R'
     'serializer.R'

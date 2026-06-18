@@ -251,6 +251,9 @@ build_symbol_information_message <- function(symbol_entry) {
     shiny_observer = as.integer(kind_enum$Event),     # 12
     shiny_output = as.integer(kind_enum$Property),    # 41
     shiny_namespace = as.integer(kind_enum$Namespace), # 28
+    # Plumber REST endpoints — Function so `semquery find --kind func` and the
+    # default (non-Variable) filters surface route handlers like any callable.
+    plumber_endpoint = as.integer(kind_enum$Function), # 17
     as.integer(kind_enum$UnspecifiedKind)             # 0
   )
 
