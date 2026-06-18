@@ -2,6 +2,10 @@
 #' @include workspace.R
 NULL
 
+# Regex matching R source files (.R or .r). Single source of truth shared by the
+# directory-pruning walk and the NULL-include fallback so the two never diverge.
+R_SOURCE_PATTERN <- "\\.[Rr]$"
+
 # =============================================================================
 # File Discovery Module
 # =============================================================================
@@ -50,12 +54,32 @@ discover_files <- function(workspace, cache_enabled = FALSE, include_patterns = 
   # Enumerate files using relative paths to avoid symlink resolution issues.
   # renv creates symlinks in renv/library/ pointing to a global cache; using
   # full.names=TRUE would resolve these, causing gitignore patterns to fail.
-  all_relative <- list.files(
-    root,
-    pattern = "\\.R$",
-    recursive = TRUE,
-    full.names = FALSE
-  )
+  #
+  # When include patterns are present we use a directory-pruning walk
+  # (enumerate_r_files) that skips whole subtrees that cannot contain a kept
+  # file (e.g. renv/ when scoped to "R/**/*.R") BEFORE traversing them. This
+  # avoids list.files(recursive=TRUE) descending into renv's library symlink
+  # (thousands of cached-package .R files). Pruning only removes subtrees that
+  # the post-walk filter loop would discard anyway, so the candidate set — and
+  # therefore the indexed document set — is identical to the unpruned walk.
+  if (!is.null(include_patterns) && length(include_patterns) > 0) {
+    parsed_includes <- parse_include_segments(include_patterns)
+    has_negation <- any(vapply(
+      ignore_rules,
+      function(r) is.list(r) && isTRUE(r$negate),
+      logical(1)
+    ))
+    all_relative <- enumerate_r_files(
+      root, ignore_rules, parsed_includes, has_negation
+    )
+  } else {
+    all_relative <- sort(list.files(
+      root,
+      pattern = R_SOURCE_PATTERN,
+      recursive = TRUE,
+      full.names = FALSE
+    ))
+  }
 
   if (length(all_relative) == 0) {
     return(list(
@@ -63,8 +87,6 @@ discover_files <- function(workspace, cache_enabled = FALSE, include_patterns = 
       cache = cache_summary(cache_enabled, state_path, previous_state, current_state)
     ))
   }
-
-  all_relative <- sort(all_relative)
 
   # Pre-compile include patterns to regex for efficiency
   include_regexes <- compile_include_patterns(include_patterns)
@@ -149,6 +171,205 @@ matches_any_pattern <- function(path, regexes) {
     }
   }
   FALSE
+}
+
+# =============================================================================
+# Directory-Pruning Walk
+# =============================================================================
+
+#' Pre-split include globs into per-segment matchers.
+#'
+#' Each pattern becomes a list of segments (split on "/"). A "**" segment is
+#' tagged with `star2 = TRUE` (matches zero or more directory segments); every
+#' other segment carries a compiled single-segment regex (via `glob_to_regex`,
+#' the same machine the post-walk filter uses, so the two never disagree).
+#'
+#' @param patterns Character vector of include glob patterns.
+#' @return List of per-pattern segment lists.
+#' @keywords internal
+parse_include_segments <- function(patterns) {
+  lapply(patterns, function(p) {
+    segs <- strsplit(p, "/", fixed = TRUE)[[1]]
+    lapply(segs, function(s) {
+      if (identical(s, "**")) {
+        list(star2 = TRUE)
+      } else {
+        list(star2 = FALSE, regex = glob_to_regex(s))
+      }
+    })
+  })
+}
+
+#' Can a directory subtree contain a file matching this segment pattern?
+#'
+#' Greedily matches directory segments against pattern segments, treating a
+#' "**" segment as zero-or-more directory segments. Returns TRUE when, after
+#' consuming all directory segments, at least one pattern segment remains to
+#' match a file below (so the directory is worth descending into). Conservative
+#' by construction: it returns TRUE whenever *some* descendant could match, so a
+#' directory holding a kept file is never pruned.
+#'
+#' @param psegs Pattern segment list from `parse_include_segments`.
+#' @param pi Current pattern-segment index.
+#' @param dsegs Character vector of directory path segments.
+#' @param di Current directory-segment index.
+#' @return Logical.
+#' @keywords internal
+seg_descend <- function(psegs, pi, dsegs, di) {
+  np <- length(psegs)
+  nd <- length(dsegs)
+
+  # Consumed all directory segments: a file can live below iff the pattern
+  # still has at least one segment left to match it.
+  if (di > nd) {
+    return(pi <= np)
+  }
+  # Pattern exhausted but directory continues: nothing below can match.
+  if (pi > np) {
+    return(FALSE)
+  }
+
+  p <- psegs[[pi]]
+  if (isTRUE(p$star2)) {
+    # "**" matches zero directory segments (advance pattern) ...
+    if (seg_descend(psegs, pi + 1L, dsegs, di)) {
+      return(TRUE)
+    }
+    # ... or one-or-more (consume a directory segment, "**" stays put).
+    return(seg_descend(psegs, pi, dsegs, di + 1L))
+  }
+
+  if (grepl(p$regex, dsegs[[di]], perl = TRUE)) {
+    return(seg_descend(psegs, pi + 1L, dsegs, di + 1L))
+  }
+  FALSE
+}
+
+#' Whether a directory could contain a file matching any include pattern.
+#'
+#' @param dir_rel Relative directory path (forward slashes, no trailing slash).
+#' @param parsed Parsed include segments from `parse_include_segments`.
+#' @return TRUE if the subtree could contain a matching file.
+#' @keywords internal
+dir_could_contain_include <- function(dir_rel, parsed) {
+  dsegs <- strsplit(dir_rel, "/", fixed = TRUE)[[1]]
+  for (psegs in parsed) {
+    if (seg_descend(psegs, 1L, dsegs, 1L)) {
+      return(TRUE)
+    }
+  }
+  FALSE
+}
+
+#' Whether a directory-only ignore rule covers an entire subtree.
+#'
+#' A `dir_only` gitignore rule (trailing slash, e.g. `renv/`) ignores the whole
+#' directory and everything beneath it. Matching such a rule against the
+#' directory itself therefore lets us prune the subtree. The caller must ensure
+#' no negation rules exist — a `!` elsewhere could re-include a descendant —
+#' which is what keeps this safe.
+#'
+#' @param dir_rel Relative directory path.
+#' @param rules Ignore rules from `detect_ignore_rules`.
+#' @return TRUE if a dir-only rule ignores this directory.
+#' @keywords internal
+dir_only_ignored <- function(dir_rel, rules) {
+  if (length(rules) == 0) {
+    return(FALSE)
+  }
+  components <- strsplit(dir_rel, "/", fixed = TRUE)[[1]]
+  suffixes <- NULL
+  dir_prefixes <- NULL
+
+  for (rule in rules) {
+    if (is.null(rule) || is.character(rule)) next
+    if (!isTRUE(rule$dir_only) || isTRUE(rule$negate)) next
+
+    # Candidate derivation deliberately parallels matches_ignore() but in
+    # DIRECTORY mode, not file mode: here the path's last component IS a
+    # directory, so `component` keeps every segment (matches_ignore drops the
+    # trailing filename for dir_only file paths). Kept separate on purpose — a
+    # shared helper would need a file-vs-dir flag that obscures both call sites.
+    scope <- rule$scope %||% "path"
+    candidates <- switch(
+      scope,
+      component = components,
+      suffix = {
+        if (is.null(suffixes)) suffixes <- build_path_suffixes(components)
+        suffixes
+      },
+      path = {
+        if (is.null(dir_prefixes)) dir_prefixes <- build_dir_prefixes(components)
+        c(dir_rel, dir_prefixes)
+      },
+      dir_rel
+    )
+
+    for (cand in candidates) {
+      if (nzchar(cand) && grepl(rule$regex, cand, perl = TRUE)) {
+        return(TRUE)
+      }
+    }
+  }
+  FALSE
+}
+
+#' Enumerate `.R` files via a directory-pruning recursive walk.
+#'
+#' Like `list.files(pattern = R_SOURCE_PATTERN, recursive = TRUE)` (with
+#' `all.files = FALSE`) but skips whole subtrees that cannot contain a kept
+#' file: a subdirectory is not descended into when (a) it cannot contain any
+#' include match, or (b) a directory-only ignore rule covers it and no
+#' negation rules are present. Hidden entries (leading ".") are skipped,
+#' matching `all.files = FALSE`.
+#'
+#' @param root Project root (absolute).
+#' @param ignore_rules Ignore rules from `detect_ignore_rules`.
+#' @param parsed_includes Parsed include segments, or NULL.
+#' @param has_negation TRUE if any ignore rule negates (disables ignore pruning).
+#' @return Sorted character vector of relative `.R` file paths.
+#' @keywords internal
+enumerate_r_files <- function(root, ignore_rules, parsed_includes, has_negation) {
+  out <- character()
+
+  walk <- function(dir_rel) {
+    abs_dir <- if (nzchar(dir_rel)) file.path(root, dir_rel) else root
+
+    entries <- list.files(abs_dir, all.files = FALSE, full.names = FALSE, no.. = TRUE)
+    if (length(entries) == 0) {
+      return(invisible())
+    }
+
+    subdirs <- list.dirs(abs_dir, recursive = FALSE, full.names = FALSE)
+    subdirs <- subdirs[!startsWith(subdirs, ".")]
+
+    files <- setdiff(entries, subdirs)
+    # R source files use either .R or .r; match both (the original list.files
+    # pattern was case-sensitive .R only). Downstream include patterns still
+    # govern which extensions are actually indexed.
+    r_files <- files[grepl(R_SOURCE_PATTERN, files)]
+    if (length(r_files) > 0) {
+      rels <- if (nzchar(dir_rel)) paste0(dir_rel, "/", r_files) else r_files
+      out <<- c(out, rels)
+    }
+
+    for (sd in subdirs) {
+      sd_rel <- if (nzchar(dir_rel)) paste0(dir_rel, "/", sd) else sd
+
+      if (!is.null(parsed_includes) &&
+          !dir_could_contain_include(sd_rel, parsed_includes)) {
+        next
+      }
+      if (!has_negation && dir_only_ignored(sd_rel, ignore_rules)) {
+        next
+      }
+      walk(sd_rel)
+    }
+    invisible()
+  }
+
+  walk("")
+  sort(out)
 }
 
 # =============================================================================
