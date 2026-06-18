@@ -123,7 +123,7 @@ index_documents_sequential <- function(files, workspace, output_path) {
   t_seq <- bench_start("sequential_indexing", list(file_count = length(files)))
 
   serializer <- init_serializer(output_path, workspace)
-  on.exit(close_serializer(serializer), add = TRUE)
+  on.exit(if (!is.null(serializer)) close_serializer(serializer), add = TRUE)
 
   # Phase 1: Parse all files
   cli::cli_alert_info("Phase 1: Parsing {.val {length(files)}} files...")
@@ -213,6 +213,7 @@ index_documents_sequential <- function(files, workspace, output_path) {
   bench_end(t_ext)
 
   result <- close_serializer(serializer)
+  serializer <- NULL
   bench_end(t_seq)
   invisible(result)
 }
