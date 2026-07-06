@@ -180,8 +180,12 @@ wait_for_daemons <- function(expected, timeout_secs = 30) {
   online <- 0L
   repeat {
     online <- mirai_online_daemons()
-    if (online >= expected) return(online)
-    if (Sys.time() >= deadline) return(online)
+    if (online >= expected) {
+      return(online)
+    }
+    if (Sys.time() >= deadline) {
+      return(online)
+    }
     Sys.sleep(0.2)
   }
 }
@@ -190,14 +194,22 @@ wait_for_daemons <- function(expected, timeout_secs = 30) {
 # returning either a matrix (dispatcher mode) or a list across versions.
 mirai_online_daemons <- function() {
   st <- tryCatch(mirai::status(), error = function(e) NULL)
-  if (is.null(st) || is.null(st$daemons)) return(0L)
+  if (is.null(st) || is.null(st$daemons)) {
+    return(0L)
+  }
   d <- st$daemons
   if (is.matrix(d)) {
-    if ("online" %in% colnames(d)) return(as.integer(sum(d[, "online"] > 0)))
+    if ("online" %in% colnames(d)) {
+      return(as.integer(sum(d[, "online"] > 0)))
+    }
     return(nrow(d))
   }
-  if (is.character(d)) return(1L)   # single dispatcher URL, daemons unknown
-  if (is.list(d)) return(length(d))
+  if (is.character(d)) {
+    return(1L)
+  } # single dispatcher URL, daemons unknown
+  if (is.list(d)) {
+    return(length(d))
+  }
   0L
 }
 
@@ -206,7 +218,9 @@ mirai_online_daemons <- function() {
 # diagnostic that distinguishes "all daemons died" from "tasks just slow."
 collect_with_watchdog <- function(tasks, expected_daemons, stall_timeout_secs = 120) {
   n <- length(tasks)
-  if (n == 0L) return(list())
+  if (n == 0L) {
+    return(list())
+  }
 
   last_completed <- 0L
   last_progress_at <- Sys.time()
@@ -228,7 +242,10 @@ collect_with_watchdog <- function(tasks, expected_daemons, stall_timeout_secs = 
         "Parallel symbol resolution stalled: no task completed in {.val {stall_timeout_secs}}s.",
         "i" = "Online daemons: {.val {online}} of {.val {expected_daemons}}.",
         "i" = "Completed: {.val {completed}} of {.val {n}} tasks.",
-        "i" = "This usually means a daemon segfaulted on a task arg (often a stale externalptr) and no replacement is coming.",
+        "i" = paste(
+          "This usually means a daemon segfaulted on a task arg",
+          "(often a stale externalptr) and no replacement is coming."
+        ),
         "x" = "Retry with sequential mode (--parallel=0) to confirm."
       ))
     }

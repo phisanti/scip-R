@@ -283,7 +283,13 @@ process_single_file_with_table <- function(file_info, ast, workspace, symbol_tab
 
   # Resolve symbols with cross-file resolution via symbol table
   t_resolve <- bench_start("phase3_resolve_symbols", list(file = file_info$relative_path %||% basename(file_info$path)))
-  analysis <- resolve_symbols(ast, workspace, track_externals = TRUE, symbol_table = symbol_table, tree_index = tree_index)
+  analysis <- resolve_symbols(
+    ast,
+    workspace,
+    track_externals = TRUE,
+    symbol_table = symbol_table,
+    tree_index = tree_index
+  )
   bench_end(t_resolve, list(symbol_count = length(analysis$symbols), occurrence_count = length(analysis$occurrences)))
 
   # Map symbols to occurrence positions (reuse tree_index)
@@ -320,9 +326,9 @@ process_single_file_with_table <- function(file_info, ast, workspace, symbol_tab
 #' @export
 #' @examples
 #' \dontrun{
-#' validate_args(0)   # 0L (sequential)
-#' validate_args(4)   # 4L (or fewer if only 2 cores available)
-#' validate_args(-1)  # Error
+#' validate_args(0) # 0L (sequential)
+#' validate_args(4) # 4L (or fewer if only 2 cores available)
+#' validate_args(-1) # Error
 #' validate_args(NULL) # 0L (default sequential)
 #' }
 validate_args <- function(parallel_value) {

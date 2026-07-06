@@ -131,8 +131,8 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   # ============================================================================
   cpp_result <- NULL
   use_cpp <- rcpp_available() &&
-             !is.null(tree_index$cpp_index) &&
-             exists("resolve_symbols_cpp", mode = "function")
+    !is.null(tree_index$cpp_index) &&
+    exists("resolve_symbols_cpp", mode = "function")
 
   if (use_cpp) {
     t_cpp <- bench_start("resolve_symbols_cpp", list(row_count = nrow(data)))
@@ -205,7 +205,6 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         }
       }
     }
-
   } else {
     # ============================================================================
     # R FALLBACK IMPLEMENTATION
@@ -254,10 +253,10 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
 
       # Determine if this is a definition
       # SYMBOL_FORMALS are always definitions (function parameters)
-      parent_id <- NA_integer_  # initialized here so qualified_pkg detection below is always safe
+      parent_id <- NA_integer_ # initialized here so qualified_pkg detection below is always safe
       if (row$token == "SYMBOL_FORMALS") {
         is_definition <- TRUE
-        is_local_scope <- TRUE  # Parameters are always local to their function
+        is_local_scope <- TRUE # Parameters are always local to their function
       } else {
         # FIX 2: Check for loop variables (forcond parent) - use indexed lookup
         parent_id <- get_parent_id_indexed(row$id, tree_index)
@@ -332,7 +331,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         relative_path = relative_path,
         definitions_env = definitions_env,
         local_registry = local_symbol_registry,
-        local_counter_env = environment(),  # For updating local_counter
+        local_counter_env = environment(), # For updating local_counter
         enclosing_name = enclosing_name,
         qualified_pkg = qualified_pkg
       )
@@ -352,7 +351,6 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
           documentation = extract_roxygen_documentation(data, row$line1)
         )
         seen_symbols_env[[symbol_id]] <- TRUE
-
       }
 
       occurrences[[length(occurrences) + 1]] <- list(
@@ -416,13 +414,13 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   t_s3 <- bench_start("extract_s3_symbols")
   s3_symbols <- build_s3_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
   bench_end(t_s3, list(s3_count = length(s3_symbols)))
-  
+
   if (length(s3_symbols) > 0) {
     # Merge S3 symbols into main symbol list
     # Check for duplicates - prefer S3-specific kind over generic function
     for (s3_sym in s3_symbols) {
       existing_idx <- which(sapply(symbols, function(s) s$symbol == s3_sym$symbol))
-      
+
       if (length(existing_idx) > 0) {
         # Update existing symbol with S3-specific kind
         symbols[[existing_idx]]$kind <- s3_sym$kind
@@ -437,7 +435,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   t_r6 <- bench_start("extract_r6_symbols")
   r6_symbols <- build_r6_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
   bench_end(t_r6, list(r6_count = length(r6_symbols)))
-  
+
   if (length(r6_symbols) > 0) {
     for (r6_sym in r6_symbols) {
       symbols[[length(symbols) + 1]] <- r6_sym
@@ -448,7 +446,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   t_s4 <- bench_start("extract_s4_symbols")
   s4_symbols <- build_s4_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
   bench_end(t_s4, list(s4_count = length(s4_symbols)))
-  
+
   if (length(s4_symbols) > 0) {
     for (s4_sym in s4_symbols) {
       symbols[[length(symbols) + 1]] <- s4_sym
@@ -459,7 +457,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
   t_shiny <- bench_start("extract_shiny_symbols")
   shiny_symbols <- build_shiny_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
   bench_end(t_shiny, list(shiny_count = length(shiny_symbols)))
-  
+
   if (length(shiny_symbols) > 0) {
     for (shiny_sym in shiny_symbols) {
       symbols[[length(symbols) + 1]] <- shiny_sym
@@ -551,11 +549,11 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
     t_qual <- bench_start("extract_qualified_symbols")
     qualified_symbols <- extract_qualified_symbols(ast_module)
     bench_end(t_qual, list(qualified_count = length(qualified_symbols)))
-    
+
     # Build external references grouped by package
     for (qual in qualified_symbols) {
       pkg_name <- qual$package
-      
+
       # Find or create package entry in external_refs
       if (length(external_refs) == 0) {
         pkg_idx <- integer(0)
@@ -563,7 +561,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         pkg_matches <- sapply(external_refs, function(x) identical(x$package, pkg_name))
         pkg_idx <- which(pkg_matches)
       }
-      
+
       if (length(pkg_idx) == 0) {
         # Create new package entry
         # Safe access: use named indexing with default fallback
@@ -620,9 +618,9 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
 #' @return Symbol ID string.
 #' @keywords internal
 resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
-                                    is_call, relative_path, definitions_env,
-                                    local_registry, local_counter_env,
-                                    enclosing_name = NULL, qualified_pkg = NULL) {
+                                   is_call, relative_path, definitions_env,
+                                   local_registry, local_counter_env,
+                                   enclosing_name = NULL, qualified_pkg = NULL) {
   bench_count("phase3_resolve_fast")
 
   # Explicit pkg::func() — highest priority; the programmer stated the package.
@@ -784,8 +782,12 @@ determine_symbol_kind_indexed <- function(row, parse_data, index) {
 #' @return Merged external references list.
 #' @keywords internal
 merge_external_refs <- function(refs1, refs2) {
-  if (length(refs1) == 0) return(refs2)
-  if (length(refs2) == 0) return(refs1)
+  if (length(refs1) == 0) {
+    return(refs2)
+  }
+  if (length(refs2) == 0) {
+    return(refs1)
+  }
 
   result <- refs1
 

@@ -258,8 +258,8 @@ extract_module_definitions <- function(data) {
     func_row <- func_rows[idx, ]
 
     symbol_on_line <- data[data$line1 == func_row$line1 &
-                           data$token == "SYMBOL" &
-                           data$col1 < func_row$col1, , drop = FALSE]
+      data$token == "SYMBOL" &
+      data$col1 < func_row$col1, , drop = FALSE]
 
     if (nrow(symbol_on_line) == 0) next
 
@@ -276,8 +276,10 @@ extract_module_definitions <- function(data) {
           func_name = func_name,
           base_name = base_name,
           component_type = suffix,
-          range = c(func_symbol_row$line1, func_symbol_row$col1,
-                    func_symbol_row$line2, func_symbol_row$col2)
+          range = c(
+            func_symbol_row$line1, func_symbol_row$col1,
+            func_symbol_row$line2, func_symbol_row$col2
+          )
         )
         break
       }
@@ -317,13 +319,13 @@ find_assigned_name <- function(expr_id, data, lookup) {
     if (nrow(assign_rows) > 0) {
       all_expr_children <- data[data$parent %in% siblings$id[siblings$token == "expr"], , drop = FALSE]
       symbol_rows <- all_expr_children[all_expr_children$token == "SYMBOL" &
-                                        all_expr_children$col1 < assign_rows$col1[1], , drop = FALSE]
-      
+        all_expr_children$col1 < assign_rows$col1[1], , drop = FALSE]
+
       if (nrow(symbol_rows) == 0) {
         symbol_rows <- siblings[siblings$token == "SYMBOL" &
-                                siblings$col1 < assign_rows$col1[1], , drop = FALSE]
+          siblings$col1 < assign_rows$col1[1], , drop = FALSE]
       }
-      
+
       if (nrow(symbol_rows) > 0) {
         symbol_rows <- symbol_rows[order(symbol_rows$col1, decreasing = TRUE), , drop = FALSE]
         return(symbol_rows$text[1])
@@ -362,10 +364,10 @@ find_output_assignment <- function(expr_id, data, lookup) {
     dollar_rows <- siblings[siblings$token == "'$'", , drop = FALSE]
     if (nrow(dollar_rows) > 0) {
       output_symbol <- siblings[siblings$token == "SYMBOL" &
-                                siblings$text == "output", , drop = FALSE]
+        siblings$text == "output", , drop = FALSE]
       if (nrow(output_symbol) > 0) {
         name_symbol <- siblings[siblings$token == "SYMBOL" &
-                                siblings$col1 > dollar_rows$col1[1], , drop = FALSE]
+          siblings$col1 > dollar_rows$col1[1], , drop = FALSE]
         if (nrow(name_symbol) > 0) {
           return(name_symbol$text[1])
         }
@@ -412,7 +414,6 @@ build_shiny_symbol_entries <- function(ast_module, relative_path, namespace = NU
       symbol_name <- shiny_info$assigned_name %||% shiny_info$module_id %||% "anonymous_module"
       display_name <- symbol_name
       kind <- "shiny_module"
-
     } else if (shiny_info$type == "shiny_module_function") {
       symbol_name <- shiny_info$func_name
       display_name <- shiny_info$func_name
@@ -423,27 +424,22 @@ build_shiny_symbol_entries <- function(ast_module, relative_path, namespace = NU
       } else {
         "shiny_module_function"
       }
-
     } else if (shiny_info$type == "shiny_reactive") {
       symbol_name <- shiny_info$assigned_name %||% "anonymous_reactive"
       display_name <- symbol_name
       kind <- "shiny_reactive"
-
     } else if (shiny_info$type == "shiny_observer") {
       symbol_name <- shiny_info$assigned_name %||% "anonymous_observer"
       display_name <- symbol_name
       kind <- "shiny_observer"
-
     } else if (shiny_info$type == "shiny_output") {
       symbol_name <- shiny_info$output_name %||% "anonymous_output"
       display_name <- symbol_name
       kind <- "shiny_output"
-
     } else if (shiny_info$type == "shiny_namespace") {
       symbol_name <- shiny_info$ns_id %||% "anonymous_ns"
       display_name <- symbol_name
       kind <- "shiny_namespace"
-
     } else {
       next
     }

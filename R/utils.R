@@ -16,10 +16,10 @@ NULL
 #' @name or_op
 #' @examples
 #' \dontrun{
-#' NULL %||% "default"  # returns "default"
-#' "value" %||% "default"  # returns "value"
-#' character() %||% "default"  # returns "default"
-#' list() %||% list(a = 1)  # returns list(a = 1)
+#' NULL %||% "default" # returns "default"
+#' "value" %||% "default" # returns "value"
+#' character() %||% "default" # returns "default"
+#' list() %||% list(a = 1) # returns list(a = 1)
 #' }
 `%||%` <- function(lhs, rhs) {
   if (is.null(lhs)) {

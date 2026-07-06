@@ -175,7 +175,7 @@ bench_report_counts <- function() {
     count <- .bench_state$counts[[op_name]]
     cat(
       '[BENCH] {"op":"', op_name, '",',
-      '"call_count":', count, ',',
+      '"call_count":', count, ",",
       '"timestamp":"', format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3"), '"}',
       "\n",
       sep = ""
@@ -196,10 +196,14 @@ bench_report_counts <- function() {
 #' @keywords internal
 #' @examples
 #' \dontrun{
-#' result <- bench_expr("expensive_operation", {
-#'   Sys.sleep(0.1)
-#'   42
-#' }, list(input_size = 100))
+#' result <- bench_expr(
+#'   "expensive_operation",
+#'   {
+#'     Sys.sleep(0.1)
+#'     42
+#'   },
+#'   list(input_size = 100)
+#' )
 #' }
 bench_expr <- function(op_name, expr, metadata = list()) {
   token <- bench_start(op_name, metadata)

@@ -58,11 +58,11 @@ plumber_present <- function(data) {
 #' @return Synthesized symbol name (character scalar).
 #' @keywords internal
 synthesize_plumber_name <- function(method, path) {
-  p <- sub("^/", "", path)            # drop leading slash
-  p <- gsub("[<>]", "", p)            # keep param names, drop angle brackets
-  p <- gsub("[^A-Za-z0-9]+", "_", p)  # path separators / specials -> underscore
-  p <- gsub("_+", "_", p)             # collapse runs
-  p <- gsub("^_|_$", "", p)           # trim edges
+  p <- sub("^/", "", path) # drop leading slash
+  p <- gsub("[<>]", "", p) # keep param names, drop angle brackets
+  p <- gsub("[^A-Za-z0-9]+", "_", p) # path separators / specials -> underscore
+  p <- gsub("_+", "_", p) # collapse runs
+  p <- gsub("^_|_$", "", p) # trim edges
   if (!nzchar(p)) {
     p <- "root"
   }

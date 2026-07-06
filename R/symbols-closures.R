@@ -75,8 +75,10 @@ extract_list_closure_definitions <- function(data, tree_index) {
     if (is.null(call_name)) next
 
     # Skip R6Class and S4 patterns (already handled by dedicated modules)
-    if (call_name %in% c("R6Class", "setClass", "setRefClass", "setGeneric",
-                          "setMethod", "setValidity", "representation")) {
+    if (call_name %in% c(
+      "R6Class", "setClass", "setRefClass", "setGeneric",
+      "setMethod", "setValidity", "representation"
+    )) {
       next
     }
 
@@ -86,9 +88,9 @@ extract_list_closure_definitions <- function(data, tree_index) {
     # Find the SYMBOL_SUB before this EQ_SUB (the element name)
     sym_sub_rows <- siblings[
       siblings$token == "SYMBOL_SUB" &
-      (siblings$line1 < eq_row$line1 |
-       (siblings$line1 == eq_row$line1 & siblings$col1 < eq_row$col1)),
-      , drop = FALSE
+        (siblings$line1 < eq_row$line1 |
+          (siblings$line1 == eq_row$line1 & siblings$col1 < eq_row$col1)), ,
+      drop = FALSE
     ]
 
     if (nrow(sym_sub_rows) == 0) next
@@ -100,9 +102,9 @@ extract_list_closure_definitions <- function(data, tree_index) {
     # Find the expr after this EQ_SUB (the RHS value)
     rhs_expr_rows <- siblings[
       siblings$token == "expr" &
-      (siblings$line1 > eq_row$line1 |
-       (siblings$line1 == eq_row$line1 & siblings$col1 > eq_row$col1)),
-      , drop = FALSE
+        (siblings$line1 > eq_row$line1 |
+          (siblings$line1 == eq_row$line1 & siblings$col1 > eq_row$col1)), ,
+      drop = FALSE
     ]
 
     if (nrow(rhs_expr_rows) == 0) next
@@ -143,7 +145,9 @@ extract_list_closure_definitions <- function(data, tree_index) {
 #' @keywords internal
 find_call_name_in_expr <- function(expr_id, data, tree_index) {
   children_ids <- get_children_indexed(expr_id, tree_index)
-  if (length(children_ids) == 0) return(NULL)
+  if (length(children_ids) == 0) {
+    return(NULL)
+  }
 
   for (child_id in children_ids) {
     row_idx <- get_row_indexed(child_id, tree_index)
@@ -186,10 +190,14 @@ find_list_assignment_name <- function(list_expr_id, data, tree_index) {
 
   for (d in seq_len(max_depth)) {
     parent_id <- get_parent_id_indexed(current_id, tree_index)
-    if (is.na(parent_id)) return(NULL)
+    if (is.na(parent_id)) {
+      return(NULL)
+    }
 
     parent_row_idx <- get_row_indexed(parent_id, tree_index)
-    if (is.na(parent_row_idx)) return(NULL)
+    if (is.na(parent_row_idx)) {
+      return(NULL)
+    }
 
     parent_token <- data$token[parent_row_idx]
     if (parent_token != "expr") {
@@ -215,8 +223,8 @@ find_list_assignment_name <- function(list_expr_id, data, tree_index) {
 
           # Look for expr children that contain a SYMBOL
           if (data$token[sib_row_idx] == "expr" &&
-              (data$line1[sib_row_idx] < assign_line ||
-               (data$line1[sib_row_idx] == assign_line && data$col1[sib_row_idx] < assign_col))) {
+            (data$line1[sib_row_idx] < assign_line ||
+              (data$line1[sib_row_idx] == assign_line && data$col1[sib_row_idx] < assign_col))) {
             # Check for SYMBOL inside this expr
             expr_children_ids <- get_children_indexed(sib_id, tree_index)
             for (ec_id in expr_children_ids) {

@@ -193,8 +193,7 @@ build_global_symbol_id <- function(name, package_name, package_version, kind = "
   # Names with non-identifier chars (e.g. dots in R) must be backtick-quoted
   # per the SCIP spec (dots are descriptor delimiters, not identifier chars).
   esc_name <- escape_scip_identifier(name)
-  suffix <- switch(
-    kind,
+  suffix <- switch(kind,
     `function` = paste0(esc_name, "()."),
     call = paste0(esc_name, "()."),
     s3_generic = paste0(esc_name, "()."),
@@ -390,7 +389,9 @@ compute_inside_function_ids_legacy <- function(parse_data, tree_index) {
       },
       error = function(e) NULL
     )
-    if (!is.null(result)) return(result)
+    if (!is.null(result)) {
+      return(result)
+    }
   }
 
   # R fallback: collect all descendants of function nodes
@@ -436,9 +437,9 @@ find_assignment_target <- function(assign_row, parse_data, tree_index) {
 
   candidates <- parse_data[
     parse_data$line1 == line &
-    parse_data$col1 < col &
-    parse_data$token == "SYMBOL",
-    , drop = FALSE
+      parse_data$col1 < col &
+      parse_data$token == "SYMBOL", ,
+    drop = FALSE
   ]
 
   if (nrow(candidates) == 0) {
@@ -514,7 +515,6 @@ is_base_r_function <- function(name) {
 #' @return Character string with R version.
 #' @keywords internal
 get_r_version <- function() {
-
   paste(R.version$major, R.version$minor, sep = ".")
 }
 

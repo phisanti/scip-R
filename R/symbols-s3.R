@@ -66,7 +66,7 @@ detect_s3_generic <- function(func_id, data, lookup, index = NULL) {
 
   # Look for SYMBOL_FUNCTION_CALL tokens that are "UseMethod"
   usemethod_rows <- all_descendants[all_descendants$token == "SYMBOL_FUNCTION_CALL" &
-                                    all_descendants$text == "UseMethod", , drop = FALSE]
+    all_descendants$text == "UseMethod", , drop = FALSE]
 
   if (nrow(usemethod_rows) == 0) {
     return(list(is_generic = FALSE, generic_name = NULL))
@@ -110,12 +110,12 @@ parse_s3_method_name <- function(func_name) {
     "all.equal", "duplicated", "unique", "sort", "rank", "order",
     "rev", "rep", "seq", "diff", "na.omit", "na.exclude", "complete.cases"
   )
-  
+
   # Check if the function name contains a dot
   if (!grepl("\\.", func_name)) {
     return(list(is_method = FALSE, generic_name = NULL, class_name = NULL))
   }
-  
+
   # Try matching against known generics
   for (generic in known_generics) {
     pattern <- paste0("^", gsub("\\[", "\\\\[", gsub("\\$", "\\\\$", generic)), "\\.")
@@ -128,7 +128,7 @@ parse_s3_method_name <- function(func_name) {
       ))
     }
   }
-  
+
   # Fallback: try splitting on first dot
   # This is heuristic and may include false positives
   parts <- strsplit(func_name, "\\.", fixed = FALSE)[[1]]
@@ -141,7 +141,7 @@ parse_s3_method_name <- function(func_name) {
       class_name = paste(parts[-1], collapse = ".")
     ))
   }
-  
+
   list(is_method = FALSE, generic_name = NULL, class_name = NULL)
 }
 
@@ -198,8 +198,8 @@ extract_s3_symbols <- function(ast_module) {
 
     # Look for SYMBOL on the same line and before this function
     symbol_on_line <- data[data$line1 == func_row$line1 &
-                           data$token == "SYMBOL" &
-                           data$col1 < func_row$col1, , drop = FALSE]
+      data$token == "SYMBOL" &
+      data$col1 < func_row$col1, , drop = FALSE]
 
     if (nrow(symbol_on_line) == 0) next
 
@@ -222,8 +222,10 @@ extract_s3_symbols <- function(ast_module) {
           type = "s3_generic",
           func_name = func_name,
           generic_name = generic_name,
-          range = c(func_symbol_row$line1, func_symbol_row$col1,
-                    func_symbol_row$line2, func_symbol_row$col2)
+          range = c(
+            func_symbol_row$line1, func_symbol_row$col1,
+            func_symbol_row$line2, func_symbol_row$col2
+          )
         )
       }
     }
@@ -238,8 +240,10 @@ extract_s3_symbols <- function(ast_module) {
         method_name = func_name,
         generic_name = method_info$generic_name,
         class_name = method_info$class_name,
-        range = c(func_symbol_row$line1, func_symbol_row$col1,
-                  func_symbol_row$line2, func_symbol_row$col2)
+        range = c(
+          func_symbol_row$line1, func_symbol_row$col1,
+          func_symbol_row$line2, func_symbol_row$col2
+        )
       )
     }
   }
@@ -258,7 +262,7 @@ extract_s3_symbols <- function(ast_module) {
 s3_to_scip <- function(s3_info, workspace) {
   package_name <- workspace$metadata$namespace %||% "local"
   version <- workspace$metadata$version %||% "0.0.0"
-  
+
   if (s3_info$type == "s3_generic") {
     # Format: scip-r <package> <version> <generic>().(s3_generic)
     descriptor <- sprintf("%s().(s3_generic)", s3_info$generic_name)
@@ -268,9 +272,9 @@ s3_to_scip <- function(s3_info, workspace) {
   } else {
     descriptor <- sprintf("%s().", s3_info$func_name %||% "unknown")
   }
-  
+
   scip_symbol <- sprintf("scip-r %s %s %s", package_name, version, descriptor)
-  
+
   list(
     symbol = scip_symbol,
     range = s3_info$range,
@@ -306,7 +310,7 @@ build_s3_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
 
   data <- ast_module$parse_data
   symbols <- list()
-  
+
   for (s3_info in s3_infos) {
     # Build symbol ID
     if (s3_info$type == "s3_generic") {
@@ -318,9 +322,9 @@ build_s3_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
       display_name <- s3_info$method_name
       kind <- "s3_method"
     } else {
-      next  # Unknown S3 type, skip
+      next # Unknown S3 type, skip
     }
-    
+
     symbols[[length(symbols) + 1]] <- list(
       symbol = symbol_id,
       display_name = display_name,
@@ -346,7 +350,7 @@ build_s3_symbol_id <- function(name, relative_path, namespace = NULL) {
   base_path <- gsub("\\.R$", "", relative_path)
   base_path <- gsub("/", "_", base_path)
   base_path <- gsub("-", "_", base_path)
-  
+
   # Build local symbol ID (backtick-quote dotted R names per SCIP spec)
   esc_name <- escape_scip_identifier(name)
   if (!is.null(namespace) && nzchar(namespace)) {

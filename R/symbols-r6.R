@@ -220,14 +220,14 @@ extract_inherit_r6 <- function(descendants, data, lookup) {
     # Check if left side is 'inherit' (token is SYMBOL_SUB for named arguments)
     # Need to find the SYMBOL_SUB that's IMMEDIATELY before this EQ_SUB (same line, just before)
     symbol_left <- siblings[siblings$token == "SYMBOL_SUB" &
-                            siblings$line1 == eq_row$line1 &
-                            siblings$col1 < eq_row$col1, , drop = FALSE]
+      siblings$line1 == eq_row$line1 &
+      siblings$col1 < eq_row$col1, , drop = FALSE]
 
     if (nrow(symbol_left) > 0 && any(symbol_left$text == "inherit")) {
       # Get the right side expr (on the same line or just after the =)
       expr_right <- siblings[siblings$token == "expr" &
-                             siblings$line1 == eq_row$line1 &
-                             siblings$col1 > eq_row$col1, , drop = FALSE]
+        siblings$line1 == eq_row$line1 &
+        siblings$col1 > eq_row$col1, , drop = FALSE]
 
       if (nrow(expr_right) > 0) {
         # The parent class name is a SYMBOL inside this expr
@@ -312,7 +312,7 @@ extract_members_r6 <- function(descendants, data, member_type, lookup) {
           lhs_mask <- eq_assign_siblings$token %in% c("SYMBOL", "SYMBOL_SUB")
           lhs_before <- eq_assign_siblings$line1 < eq_assign_row$line1 |
             (eq_assign_siblings$line1 == eq_assign_row$line1 &
-               eq_assign_siblings$col1 < eq_assign_row$col1)
+              eq_assign_siblings$col1 < eq_assign_row$col1)
           symbol_lhs <- eq_assign_siblings[lhs_mask & lhs_before, , drop = FALSE]
 
           if (nrow(symbol_lhs) > 0) {
@@ -322,7 +322,7 @@ extract_members_r6 <- function(descendants, data, member_type, lookup) {
             # Check if RHS contains a FUNCTION token (method vs field)
             rhs_after <- eq_assign_siblings$line1 > eq_assign_row$line1 |
               (eq_assign_siblings$line1 == eq_assign_row$line1 &
-                 eq_assign_siblings$col1 > eq_assign_row$col1)
+                eq_assign_siblings$col1 > eq_assign_row$col1)
             rhs_expr <- eq_assign_siblings[eq_assign_siblings$token == "expr" & rhs_after, , drop = FALSE]
 
             is_method <- FALSE
@@ -383,11 +383,11 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
 
   data <- ast_module$parse_data
   symbols <- list()
-  
+
   for (class_info in r6_classes) {
     # Build class symbol ID using the helper from symbols.R
     class_symbol <- build_r6_symbol_id(class_info$class_name, relative_path, namespace)
-    
+
     # Add class symbol
     symbols[[length(symbols) + 1]] <- list(
       symbol = class_symbol,
@@ -395,7 +395,7 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
       kind = "r6_class",
       documentation = extract_roxygen_documentation(data, class_info$range[1])
     )
-    
+
     # Process public members (list of {name, is_method} info)
     if (!is.null(class_info$public_members) && length(class_info$public_members) > 0) {
       for (member_info in class_info$public_members) {
@@ -469,7 +469,7 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
       }
     }
   }
-  
+
   symbols
 }
 
@@ -487,7 +487,7 @@ build_r6_symbol_id <- function(name, relative_path, namespace = NULL) {
   base_path <- gsub("\\.R$", "", relative_path)
   base_path <- gsub("/", "_", base_path)
   base_path <- gsub("-", "_", base_path)
-  
+
   # Build local symbol ID (backtick-quote dotted R names per SCIP spec)
   esc_name <- escape_scip_identifier(name)
   if (!is.null(namespace) && nzchar(namespace)) {

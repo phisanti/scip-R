@@ -172,7 +172,9 @@ detect_ignore_rules <- function(root) {
 #' @keywords internal
 read_ignore_file <- function(path, strip_comments = TRUE) {
   lines <- readLines(path, warn = FALSE)
-  if (length(lines) == 0) return(character())
+  if (length(lines) == 0) {
+    return(character())
+  }
 
   cleaned <- character()
   for (line in lines) {
@@ -193,7 +195,9 @@ read_ignore_file <- function(path, strip_comments = TRUE) {
 #' @return List of rule objects compatible with `matches_ignore()`.
 #' @keywords internal
 parse_gitignore_lines <- function(lines) {
-  if (length(lines) == 0) return(list())
+  if (length(lines) == 0) {
+    return(list())
+  }
 
   rules <- list()
   for (line in lines) {
@@ -218,13 +222,17 @@ parse_gitignore_lines <- function(lines) {
 #' @return Rule list with regex, negate, scope, dir_only, raw; or NULL.
 #' @keywords internal
 parse_gitignore_line <- function(line) {
-  if (is.null(line)) return(NULL)
+  if (is.null(line)) {
+    return(NULL)
+  }
 
   original <- line
   line <- sub("\r$", "", line, perl = TRUE)
   line <- trimws(line, which = "right")
 
-  if (!nzchar(line)) return(NULL)
+  if (!nzchar(line)) {
+    return(NULL)
+  }
 
   # Handle comments (escaped or not)
   if (startsWith(line, "\\#")) {
@@ -249,7 +257,9 @@ parse_gitignore_line <- function(line) {
   line <- gsub("\\\\#", "#", line, perl = TRUE)
   line <- gsub("\\\\!", "!", line, perl = TRUE)
 
-  if (!nzchar(line)) return(NULL)
+  if (!nzchar(line)) {
+    return(NULL)
+  }
 
   # Determine matching behavior
   anchored <- startsWith(line, "/")
@@ -259,7 +269,9 @@ parse_gitignore_line <- function(line) {
   has_slash <- grepl("/", pattern, fixed = TRUE)
 
   regex <- glob_to_regex(pattern)
-  if (!nzchar(regex)) return(NULL)
+  if (!nzchar(regex)) {
+    return(NULL)
+  }
 
   # Scope determines how pattern is matched:
   #   - "path": match against full relative path (anchored patterns)

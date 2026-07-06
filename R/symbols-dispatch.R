@@ -322,10 +322,13 @@ extract_dispatch_target_arg <- function(descendants, call_text) {
   # No string constant — look for a symbol argument
   symbol_rows <- descendants[descendants$token == "SYMBOL", , drop = FALSE]
   # Filter out the dispatch function name itself and common non-target tokens
-  exclude_names <- c("do.call", "match.fun", "args", "list",
-                      "what", "FUN", "ARGS")
+  exclude_names <- c(
+    "do.call", "match.fun", "args", "list",
+    "what", "FUN", "ARGS"
+  )
   symbol_rows <- symbol_rows[
-    !symbol_rows$text %in% exclude_names, , drop = FALSE
+    !symbol_rows$text %in% exclude_names, ,
+    drop = FALSE
   ]
 
   if (nrow(symbol_rows) > 0) {
@@ -336,7 +339,8 @@ extract_dispatch_target_arg <- function(descendants, call_text) {
   # This handles nested cases like do.call(match.fun("func"), ...)
   inner_calls <- descendants[
     descendants$token == "SYMBOL_FUNCTION_CALL" &
-    descendants$text != call_text, , drop = FALSE
+      descendants$text != call_text, ,
+    drop = FALSE
   ]
   if (nrow(inner_calls) > 0 && inner_calls$text[1] == "match.fun") {
     # Nested dispatch: do.call(match.fun("func"), ...)
@@ -464,7 +468,7 @@ extract_c_dispatch_edges <- function(data, tree_index = NULL,
     edges[[length(edges) + 1]] <- list(
       symbol = symbol_id,
       is_reference = TRUE,
-      confidence = 1.0,  # String literal / backtick symbol -> always confident
+      confidence = 1.0, # String literal / backtick symbol -> always confident
       target_name = c_func_name,
       dispatch_type = call_text,
       range = c(call_row$line1, call_row$col1, call_row$line2, call_row$col2)

@@ -221,13 +221,13 @@ extract_named_list_arg <- function(descendants, data, arg_name, lookup) {
     siblings <- rows_by_parent_lookup(eq_parent, lookup)
 
     symbol_left <- siblings[siblings$token == "SYMBOL_SUB" &
-                            siblings$line1 == eq_row$line1 &
-                            siblings$col1 < eq_row$col1, , drop = FALSE]
+      siblings$line1 == eq_row$line1 &
+      siblings$col1 < eq_row$col1, , drop = FALSE]
 
     if (nrow(symbol_left) > 0 && any(symbol_left$text == arg_name)) {
       expr_right <- siblings[siblings$token == "expr" &
-                             siblings$line1 >= eq_row$line1 &
-                             siblings$col1 > eq_row$col1, , drop = FALSE]
+        siblings$line1 >= eq_row$line1 &
+        siblings$col1 > eq_row$col1, , drop = FALSE]
 
       if (nrow(expr_right) > 0) {
         list_descendants <- get_descendants_lookup(expr_right$id[1], lookup)
@@ -240,7 +240,7 @@ extract_named_list_arg <- function(descendants, data, arg_name, lookup) {
           inner_siblings <- rows_by_parent_lookup(inner_eq_row$parent, lookup)
 
           slot_symbol <- inner_siblings[inner_siblings$token %in% c("SYMBOL", "SYMBOL_SUB") &
-                                        inner_siblings$col1 < inner_eq_row$col1, , drop = FALSE]
+            inner_siblings$col1 < inner_eq_row$col1, , drop = FALSE]
           if (nrow(slot_symbol) > 0) {
             slot_symbol <- slot_symbol[order(slot_symbol$col1, decreasing = TRUE), , drop = FALSE]
             slot_names <- c(slot_names, slot_symbol$text[1])
@@ -279,12 +279,12 @@ extract_string_vector_arg <- function(descendants, data, arg_name, lookup) {
     siblings <- rows_by_parent_lookup(eq_parent, lookup)
 
     symbol_left <- siblings[siblings$token == "SYMBOL_SUB" &
-                            siblings$line1 == eq_row$line1 &
-                            siblings$col1 < eq_row$col1, , drop = FALSE]
+      siblings$line1 == eq_row$line1 &
+      siblings$col1 < eq_row$col1, , drop = FALSE]
 
     if (nrow(symbol_left) > 0 && any(symbol_left$text == arg_name)) {
       expr_right <- siblings[siblings$token == "expr" &
-                             siblings$col1 > eq_row$col1, , drop = FALSE]
+        siblings$col1 > eq_row$col1, , drop = FALSE]
 
       if (nrow(expr_right) > 0) {
         list_descendants <- get_descendants_lookup(expr_right$id[1], lookup)
@@ -350,7 +350,6 @@ build_s4_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
           )
         }
       }
-
     } else if (s4_info$type == "s4_generic") {
       symbol_id <- build_s4_symbol_id(s4_info$generic_name, relative_path, namespace)
 
@@ -360,7 +359,6 @@ build_s4_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
         kind = "s4_generic",
         documentation = extract_roxygen_documentation(data, s4_info$range[1])
       )
-
     } else if (s4_info$type == "s4_method") {
       method_name <- if (!is.null(s4_info$signature)) {
         paste0(s4_info$generic_name, ",", s4_info$signature)

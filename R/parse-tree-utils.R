@@ -190,7 +190,9 @@ build_scope_index <- function(parse_data, rows, parent) {
       },
       error = function(e) NULL
     )
-    if (!is.null(result)) return(result)
+    if (!is.null(result)) {
+      return(result)
+    }
   }
 
   # R fallback: position-based containment
@@ -381,9 +383,9 @@ build_function_name_map <- function(parse_data) {
     # where the FUNCTION is nested inside a call, not the direct assignment RHS.
     has_call_between <- any(
       parse_data$line1 == func_line &
-      parse_data$token == "SYMBOL_FUNCTION_CALL" &
-      parse_data$col1 > assign_col &
-      parse_data$col1 < func_col
+        parse_data$token == "SYMBOL_FUNCTION_CALL" &
+        parse_data$col1 > assign_col &
+        parse_data$col1 < func_col
     )
     if (has_call_between) next
 
@@ -422,7 +424,7 @@ get_enclosing_function_name <- function(node_id, index) {
 
   # Look up the function name from the pre-computed map
   func_name <- index$function_names[[as.character(enc_func_id)]]
-  func_name  # Returns NULL if not found (anonymous function)
+  func_name # Returns NULL if not found (anonymous function)
 }
 
 #' Check if node has descendant of given type using DFS with early exit.
@@ -446,7 +448,9 @@ has_descendant_of_type_indexed <- function(node_id, token_types, index) {
       has_descendant_of_type_cpp(node_id, token_types, index$cpp_index, index$data$token),
       error = function(e) NULL
     )
-    if (!is.null(result)) return(result)
+    if (!is.null(result)) {
+      return(result)
+    }
   }
 
   # Fallback to R implementation
@@ -470,7 +474,7 @@ has_descendant_of_type_indexed_r <- function(node_id, token_types, index) {
 
     row_idx <- get_row_indexed(current, index)
     if (!is.na(row_idx) && index$data$token[row_idx] %in% token_types) {
-      return(TRUE)  # Early exit on first match
+      return(TRUE) # Early exit on first match
     }
 
     # Add children to front of stack (DFS)
@@ -576,7 +580,7 @@ find_ancestor_of_type_indexed <- function(node_id, token_types, index) {
     current_id <- get_parent_id_indexed(current_id, index)
   }
 
-  index$data[integer(0), , drop = FALSE]  # Not found
+  index$data[integer(0), , drop = FALSE] # Not found
 }
 
 #' Find nodes on the same line using pre-computed line index (O(1) line lookup).

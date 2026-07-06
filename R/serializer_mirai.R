@@ -20,12 +20,17 @@ NULL
 #' \dontrun{
 #' serialize_documents_mirai(plan$files, workspace, "index.scip", daemons = 4)
 #' }
-serialize_documents_mirai <- function(files, workspace, output_path, daemons = parallel::detectCores(logical = FALSE), bundles = NULL) {
+serialize_documents_mirai <- function(files, workspace, output_path,
+                                      daemons = parallel::detectCores(logical = FALSE),
+                                      bundles = NULL) {
   bundles <- bundles %||% resolve_documents_mirai(files, workspace, daemons = daemons)
   serializer <- init_serializer(output_path, workspace)
-  on.exit({
-    if (!is.null(serializer)) close_serializer(serializer)
-  }, add = TRUE)
+  on.exit(
+    {
+      if (!is.null(serializer)) close_serializer(serializer)
+    },
+    add = TRUE
+  )
 
   # Accumulate external references across all bundles
   all_external_refs <- list()

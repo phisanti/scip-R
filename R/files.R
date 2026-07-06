@@ -291,8 +291,7 @@ dir_only_ignored <- function(dir_rel, rules) {
     # trailing filename for dir_only file paths). Kept separate on purpose — a
     # shared helper would need a file-vs-dir flag that obscures both call sites.
     scope <- rule$scope %||% "path"
-    candidates <- switch(
-      scope,
+    candidates <- switch(scope,
       component = components,
       suffix = {
         if (is.null(suffixes)) suffixes <- build_path_suffixes(components)
@@ -357,7 +356,7 @@ enumerate_r_files <- function(root, ignore_rules, parsed_includes, has_negation)
       sd_rel <- if (nzchar(dir_rel)) paste0(dir_rel, "/", sd) else sd
 
       if (!is.null(parsed_includes) &&
-          !dir_could_contain_include(sd_rel, parsed_includes)) {
+        !dir_could_contain_include(sd_rel, parsed_includes)) {
         next
       }
       if (!has_negation && dir_only_ignored(sd_rel, ignore_rules)) {
@@ -424,8 +423,7 @@ matches_ignore <- function(path, rules) {
     dir_only <- isTRUE(rule$dir_only)
 
     # Select match candidates based on scope
-    candidates <- switch(
-      scope,
+    candidates <- switch(scope,
       component = {
         if (dir_only) {
           # Exclude filename for directory patterns
@@ -492,7 +490,9 @@ matches_ignore <- function(path, rules) {
 #' @keywords internal
 build_path_suffixes <- function(components) {
   n <- length(components)
-  if (n == 0) return(character())
+  if (n == 0) {
+    return(character())
+  }
 
   vapply(seq_len(n), function(i) {
     paste(components[i:n], collapse = "/")
@@ -509,7 +509,9 @@ build_path_suffixes <- function(components) {
 #' @keywords internal
 build_dir_prefixes <- function(components) {
   n <- length(components)
-  if (n <= 1) return(character())
+  if (n <= 1) {
+    return(character())
+  }
 
   dir_parts <- components[-n]
   vapply(seq_along(dir_parts), function(i) {
@@ -573,10 +575,13 @@ load_cache_state <- function(state_path) {
     return(list())
   }
 
-  tryCatch({
-    state <- readRDS(state_path)
-    if (is.list(state)) state else list()
-  }, error = function(e) list())
+  tryCatch(
+    {
+      state <- readRDS(state_path)
+      if (is.list(state)) state else list()
+    },
+    error = function(e) list()
+  )
 }
 
 #' Save file state cache to disk.

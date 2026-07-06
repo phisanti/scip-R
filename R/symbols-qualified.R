@@ -23,7 +23,7 @@ NULL
 look_backward <- function(text) {
   # Helper to convert NA to empty string
   na_to_empty_string <- function(x) if (is.na(x)) "" else x
-  
+
   # Regex pattern from languageserver/R/utils.R:443
   # Matches: [package](:: or :::)[symbol]
   # (?<!\\$) - negative lookbehind: not preceded by $
@@ -32,9 +32,9 @@ look_backward <- function(text) {
   # (:::?) - accessor: :: or :::
   # ((?:[^\\W_]|\\.)(?:[^\\W]|\\.)*)? - symbol name (letters, numbers, dots, underscores)
   pattern <- "(?<!\\$)(?:\\b|(?=\\.))(?:([a-zA-Z][a-zA-Z0-9.]+)(:::?))?((?:[^\\W_]|\\.)(?:[^\\W]|\\.)*)?$"
-  
+
   matches <- stringi::stri_match_first_regex(text, pattern)
-  
+
   list(
     full_token = na_to_empty_string(matches[1]),
     package = na_to_empty_string(matches[2]),
@@ -61,11 +61,11 @@ extract_qualified_symbols <- function(ast_module) {
   if (is.null(data) || nrow(data) == 0) {
     return(list())
   }
-  
+
   # Find all namespace accessor tokens (:: and :::)
   # In R's parse tree, these are tokenized as NS_GET and NS_GET_INT
   ns_rows <- data[data$token %in% c("NS_GET", "NS_GET_INT"), , drop = FALSE]
-  
+
   if (nrow(ns_rows) == 0) {
     return(list())
   }
@@ -90,7 +90,7 @@ extract_qualified_symbols <- function(ast_module) {
     # Structure: expr with children [SYMBOL_PACKAGE, NS_GET, SYMBOL_FUNCTION_CALL/SYMBOL]
     children <- rows_by_parent_lookup(parent_id, lookup)
     children <- children[order(children$col1), , drop = FALSE]
-    
+
     # Look for SYMBOL_PACKAGE token (the package name)
     package_rows <- children[children$token == "SYMBOL_PACKAGE", , drop = FALSE]
     if (nrow(package_rows) < 1) {
@@ -98,34 +98,38 @@ extract_qualified_symbols <- function(ast_module) {
       package_rows <- children[children$token == "SYMBOL" & children$col1 < ns_row$col1, , drop = FALSE]
       if (nrow(package_rows) < 1) next
     }
-    
+
     package_name <- package_rows$text[1]
-    
+
     # After NS_GET token, look for SYMBOL or SYMBOL_FUNCTION_CALL
-    symbol_after_ns <- children[children$col1 > ns_row$col2 & 
-                                 children$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL"), , 
-                                 drop = FALSE]
-    
+    symbol_after_ns <- children[
+      children$col1 > ns_row$col2 &
+        children$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL"), ,
+      drop = FALSE
+    ]
+
     if (nrow(symbol_after_ns) == 0) next
-    
+
     # Take the first symbol after the namespace operator
     symbol_row <- symbol_after_ns[1, ]
     symbol_name <- symbol_row$text
-    
+
     # Determine accessor type
     accessor <- if (ns_row$token == "NS_GET") "::" else ":::"
-    
+
     qualified_symbols[[length(qualified_symbols) + 1]] <- list(
       package = package_name,
       accessor = accessor,
       token = symbol_name,
       token_type = symbol_row$token,
       range = c(symbol_row$line1, symbol_row$col1, symbol_row$line2, symbol_row$col2),
-      full_range = c(parent_row$line1[1], parent_row$col1[1],
-                     parent_row$line2[1], parent_row$col2[1])
+      full_range = c(
+        parent_row$line1[1], parent_row$col1[1],
+        parent_row$line2[1], parent_row$col2[1]
+      )
     )
   }
-  
+
   qualified_symbols
 }
 

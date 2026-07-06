@@ -139,12 +139,15 @@ find_proto_path <- function(project_root) {
 proto_loaded <- function(proto_path) {
   descriptor_name <- "scip.Index"
   # Check if descriptor exists in current session without triggering errors
-  tryCatch({
-    RProtoBuf::P(descriptor_name)
-    TRUE
-  }, error = function(e) {
-    FALSE
-  })
+  tryCatch(
+    {
+      RProtoBuf::P(descriptor_name)
+      TRUE
+    },
+    error = function(e) {
+      FALSE
+    }
+  )
 }
 
 #' Construct a Document protobuf message from an internal document list.
@@ -221,40 +224,39 @@ build_symbol_information_message <- function(symbol_entry) {
   sym$symbol <- symbol_entry$symbol
   sym$display_name <- symbol_entry$display_name %||% symbol_entry$symbol
   kind_enum <- RProtoBuf::P("scip.SymbolInformation.Kind")
-  sym$kind <- switch(
-    symbol_entry$kind,
+  sym$kind <- switch(symbol_entry$kind,
     # Basic R constructs
-    `function` = as.integer(kind_enum$Function),      # 17
-    call = as.integer(kind_enum$Function),            # 17
-    variable = as.integer(kind_enum$Variable),        # 61
-    parameter = as.integer(kind_enum$Parameter),      # 37
+    `function` = as.integer(kind_enum$Function), # 17
+    call = as.integer(kind_enum$Function), # 17
+    variable = as.integer(kind_enum$Variable), # 61
+    parameter = as.integer(kind_enum$Parameter), # 37
     # S3 OOP
-    s3_generic = as.integer(kind_enum$Function),      # 17
-    s3_method = as.integer(kind_enum$Method),         # 26
+    s3_generic = as.integer(kind_enum$Function), # 17
+    s3_method = as.integer(kind_enum$Method), # 26
     # R6 OOP
-    r6_class = as.integer(kind_enum$Class),           # 7
-    r6_method = as.integer(kind_enum$Method),         # 26
-    r6_field = as.integer(kind_enum$Field),           # 15
+    r6_class = as.integer(kind_enum$Class), # 7
+    r6_method = as.integer(kind_enum$Method), # 26
+    r6_field = as.integer(kind_enum$Field), # 15
     r6_constructor = as.integer(kind_enum$Constructor), # 9
-    r6_active = as.integer(kind_enum$Property),       # 41
+    r6_active = as.integer(kind_enum$Property), # 41
     # S4 OOP
-    s4_class = as.integer(kind_enum$Class),           # 7
-    s4_generic = as.integer(kind_enum$Function),      # 17
-    s4_method = as.integer(kind_enum$Method),         # 26
-    s4_slot = as.integer(kind_enum$Field),            # 15
+    s4_class = as.integer(kind_enum$Class), # 7
+    s4_generic = as.integer(kind_enum$Function), # 17
+    s4_method = as.integer(kind_enum$Method), # 26
+    s4_slot = as.integer(kind_enum$Field), # 15
     # Shiny patterns
-    shiny_module = as.integer(kind_enum$Module),      # 27
+    shiny_module = as.integer(kind_enum$Module), # 27
     shiny_module_function = as.integer(kind_enum$Function), # 17
-    shiny_ui = as.integer(kind_enum$Function),        # 17
-    shiny_server = as.integer(kind_enum$Function),    # 17
-    shiny_reactive = as.integer(kind_enum$Function),  # 17 — reactives are callable (x() retrieves value)
-    shiny_observer = as.integer(kind_enum$Event),     # 12
-    shiny_output = as.integer(kind_enum$Property),    # 41
+    shiny_ui = as.integer(kind_enum$Function), # 17
+    shiny_server = as.integer(kind_enum$Function), # 17
+    shiny_reactive = as.integer(kind_enum$Function), # 17 — reactives are callable (x() retrieves value)
+    shiny_observer = as.integer(kind_enum$Event), # 12
+    shiny_output = as.integer(kind_enum$Property), # 41
     shiny_namespace = as.integer(kind_enum$Namespace), # 28
     # Plumber REST endpoints — Function so `semquery find --kind func` and the
     # default (non-Variable) filters surface route handlers like any callable.
     plumber_endpoint = as.integer(kind_enum$Function), # 17
-    as.integer(kind_enum$UnspecifiedKind)             # 0
+    as.integer(kind_enum$UnspecifiedKind) # 0
   )
 
   # Add documentation if present

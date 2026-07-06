@@ -26,4 +26,3 @@ parse_file <- function(file_info) {
     file_info = file_info
   )
 }
-

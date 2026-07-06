@@ -44,7 +44,7 @@
 #'
 #' @keywords internal
 resolve_symbols_cpp <- function(parse_data, tree_index_ptr, inside_function, enclosing_function, definitions_env, base_r_funcs, relative_path, package_name, r_version) {
-    .Call(`_scipR_resolve_symbols_cpp`, parse_data, tree_index_ptr, inside_function, enclosing_function, definitions_env, base_r_funcs, relative_path, package_name, r_version)
+  .Call(`_scipR_resolve_symbols_cpp`, parse_data, tree_index_ptr, inside_function, enclosing_function, definitions_env, base_r_funcs, relative_path, package_name, r_version)
 }
 
 #' Build a tree index from parse data (C++ implementation)
@@ -58,7 +58,7 @@ resolve_symbols_cpp <- function(parse_data, tree_index_ptr, inside_function, enc
 #' @return External pointer (XPtr) to TreeIndex structure
 #' @keywords internal
 build_tree_index_cpp <- function(id, parent, line1) {
-    .Call(`_scipR_build_tree_index_cpp`, id, parent, line1)
+  .Call(`_scipR_build_tree_index_cpp`, id, parent, line1)
 }
 
 #' Get children of a node using C++ tree index
@@ -68,7 +68,7 @@ build_tree_index_cpp <- function(id, parent, line1) {
 #' @return Integer vector of child node IDs
 #' @keywords internal
 get_children_cpp <- function(node_id, index_ptr) {
-    .Call(`_scipR_get_children_cpp`, node_id, index_ptr)
+  .Call(`_scipR_get_children_cpp`, node_id, index_ptr)
 }
 
 #' Get parent ID of a node using C++ tree index
@@ -78,7 +78,7 @@ get_children_cpp <- function(node_id, index_ptr) {
 #' @return Integer parent ID, or NA if not found
 #' @keywords internal
 get_parent_cpp <- function(node_id, index_ptr) {
-    .Call(`_scipR_get_parent_cpp`, node_id, index_ptr)
+  .Call(`_scipR_get_parent_cpp`, node_id, index_ptr)
 }
 
 #' Get row index of a node using C++ tree index
@@ -88,7 +88,7 @@ get_parent_cpp <- function(node_id, index_ptr) {
 #' @return Integer row index (1-based for R), or NA if not found
 #' @keywords internal
 get_row_cpp <- function(node_id, index_ptr) {
-    .Call(`_scipR_get_row_cpp`, node_id, index_ptr)
+  .Call(`_scipR_get_row_cpp`, node_id, index_ptr)
 }
 
 #' Get all descendant IDs using pre-allocated DFS (C++ implementation)
@@ -102,7 +102,7 @@ get_row_cpp <- function(node_id, index_ptr) {
 #' @return Integer vector of all descendant node IDs
 #' @keywords internal
 get_descendant_ids_cpp <- function(node_id, index_ptr) {
-    .Call(`_scipR_get_descendant_ids_cpp`, node_id, index_ptr)
+  .Call(`_scipR_get_descendant_ids_cpp`, node_id, index_ptr)
 }
 
 #' Check if any descendant has a specific token type
@@ -117,7 +117,7 @@ get_descendant_ids_cpp <- function(node_id, index_ptr) {
 #' @return TRUE if a matching descendant exists, FALSE otherwise
 #' @keywords internal
 has_descendant_of_type_cpp <- function(node_id, target_tokens, index_ptr, tokens) {
-    .Call(`_scipR_has_descendant_of_type_cpp`, node_id, target_tokens, index_ptr, tokens)
+  .Call(`_scipR_has_descendant_of_type_cpp`, node_id, target_tokens, index_ptr, tokens)
 }
 
 #' Compute inside-function IDs using single-pass algorithm
@@ -130,7 +130,7 @@ has_descendant_of_type_cpp <- function(node_id, target_tokens, index_ptr, tokens
 #' @return Integer vector of all node IDs inside function bodies
 #' @keywords internal
 compute_inside_function_ids_cpp <- function(func_ids, index_ptr) {
-    .Call(`_scipR_compute_inside_function_ids_cpp`, func_ids, index_ptr)
+  .Call(`_scipR_compute_inside_function_ids_cpp`, func_ids, index_ptr)
 }
 
 #' Check if C++ tree index is available
@@ -141,7 +141,7 @@ compute_inside_function_ids_cpp <- function(func_ids, index_ptr) {
 #' @return TRUE if x is a TreeIndexPtr, FALSE otherwise
 #' @keywords internal
 is_tree_index_ptr <- function(x) {
-    .Call(`_scipR_is_tree_index_ptr`, x)
+  .Call(`_scipR_is_tree_index_ptr`, x)
 }
 
 #' Get number of nodes in tree index
@@ -150,7 +150,7 @@ is_tree_index_ptr <- function(x) {
 #' @return Number of nodes
 #' @keywords internal
 tree_index_size <- function(index_ptr) {
-    .Call(`_scipR_tree_index_size`, index_ptr)
+  .Call(`_scipR_tree_index_size`, index_ptr)
 }
 
 #' Build scope index using position-based containment (C++ implementation)
@@ -172,6 +172,5 @@ tree_index_size <- function(index_ptr) {
 #' @return Integer vector of enclosing function IDs (NA for top-level nodes)
 #' @keywords internal
 build_scope_index_cpp <- function(id, line1, col1, line2, col2, func_ids, func_line1, func_col1, func_line2, func_col2) {
-    .Call(`_scipR_build_scope_index_cpp`, id, line1, col1, line2, col2, func_ids, func_line1, func_col1, func_line2, func_col2)
+  .Call(`_scipR_build_scope_index_cpp`, id, line1, col1, line2, col2, func_ids, func_line1, func_col1, func_line2, func_col2)
 }
-
