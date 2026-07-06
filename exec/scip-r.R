@@ -1,7 +1,6 @@
 #!/usr/bin/env Rapp
 #| name: scip-r
 #| description: Generate SCIP index files for R projects
-#| version: 0.9.4
 #| launcher:
 #|   no-init-file: true
 
@@ -56,7 +55,8 @@ version <- FALSE
 # -----------------------------------------------------------------------------
 
 if (isTRUE(version)) {
-  cli::cli_text("scip-r {.val {as.character(utils::packageVersion('scipR'))}}")
+  desc <- utils::packageDescription("scipR", fields = "Version")
+  cli::cli_text("scip-r {.val {desc}}")
   quit(save = "no", status = 0L)
 }
 
@@ -65,7 +65,7 @@ root <- normalizePath(root, winslash = "/", mustWork = FALSE)
 output <- normalizePath(output, winslash = "/", mustWork = FALSE)
 
 # Validate parallel workers
-parallel <- scipR:::validate_parallel_arg(parallel)
+parallel <- scipR::validate_args(parallel)
 
 # Convert empty strings to NULL for optional parameters
 namespace <- if (nzchar(namespace)) namespace else NULL

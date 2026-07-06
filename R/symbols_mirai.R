@@ -123,18 +123,25 @@ resolve_documents_mirai <- function(files, workspace, daemons = parallel::detect
     mirai::mirai(
       {
         library(scipR)
+        ns <- asNamespace("scipR")
         # Rebuild tree_index locally so cpp_index references daemon-side memory
-        tree_index <- scipR:::build_tree_index(ast$parse_data)
-        analysis <- scipR:::resolve_symbols(
+        tree_index <- get("build_tree_index", envir = ns)(ast$parse_data)
+        analysis <- get("resolve_symbols", envir = ns)(
           ast,
           workspace,
           track_externals = TRUE,
           symbol_table = symbol_table,
           tree_index = tree_index
         )
-        occurrences <- scipR:::map_occurrences(analysis, ast, tree_index = tree_index)
-        document <- scipR:::build_document(file_info, occurrences, analysis)
-        diagnostics <- scipR:::collect_diagnostics(file_info, ast, analysis)
+        occurrences <- get("map_occurrences", envir = ns)(
+          analysis, ast, tree_index = tree_index
+        )
+        document <- get("build_document", envir = ns)(
+          file_info, occurrences, analysis
+        )
+        diagnostics <- get("collect_diagnostics", envir = ns)(
+          file_info, ast, analysis
+        )
         list(document = document, diagnostics = diagnostics, external_refs = analysis$external_refs)
       },
       ast = ast,

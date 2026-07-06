@@ -241,8 +241,6 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
     # LAZY LOCAL SYMBOL CREATION: Create local symbols on-demand
     # Maps position_key -> symbol_id for deduplication
     local_symbol_registry <- new.env(hash = TRUE, parent = emptyenv())
-    local_counter <- 0L
-
     # FIX 1: Include SYMBOL_FORMALS to detect function parameters
     symbol_rows <- data[data$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL", "SYMBOL_FORMALS"), ]
     symbol_rows <- symbol_rows[order(symbol_rows$line1, symbol_rows$col1), , drop = FALSE]

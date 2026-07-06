@@ -308,7 +308,7 @@ process_single_file_with_table <- function(file_info, ast, workspace, symbol_tab
   )
 }
 
-#' Validate and normalize the --parallel argument.
+#' Validate and normalize CLI arguments.
 #'
 #' Ensures the parallel worker count is:
 #' - Non-negative
@@ -317,15 +317,15 @@ process_single_file_with_table <- function(file_info, ast, workspace, symbol_tab
 #'
 #' @param parallel_value Parsed integer from CLI or config.
 #' @return Integer number of workers to request (0 for sequential mode).
-#' @keywords internal
+#' @export
 #' @examples
 #' \dontrun{
-#' validate_parallel_arg(0)   # 0L (sequential)
-#' validate_parallel_arg(4)   # 4L (or fewer if only 2 cores available)
-#' validate_parallel_arg(-1)  # Error
-#' validate_parallel_arg(NULL) # 0L (default sequential)
+#' validate_args(0)   # 0L (sequential)
+#' validate_args(4)   # 4L (or fewer if only 2 cores available)
+#' validate_args(-1)  # Error
+#' validate_args(NULL) # 0L (default sequential)
 #' }
-validate_parallel_arg <- function(parallel_value) {
+validate_args <- function(parallel_value) {
   # Handle NULL/NA as sequential mode
   if (is.null(parallel_value) || is.na(parallel_value)) {
     return(0L)

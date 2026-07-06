@@ -51,3 +51,36 @@ escape_scip_identifier <- function(name) {
   }
   name
 }
+
+#' Read this package's version from DESCRIPTION.
+#'
+#' @return Character scalar package version.
+#' @keywords internal
+scip_r_version <- function() {
+  desc_path <- system.file("DESCRIPTION", package = "scipR")
+  if (nzchar(desc_path) && file.exists(desc_path)) {
+    desc <- read.dcf(desc_path, fields = "Version")
+    version <- desc[1, "Version"]
+    if (!is.na(version) && nzchar(version)) {
+      return(version)
+    }
+  }
+
+  pkg_desc <- utils::packageDescription("scipR", fields = "Version")
+  if (!is.na(pkg_desc) && nzchar(pkg_desc)) {
+    return(pkg_desc)
+  }
+
+  local_desc <- file.path(getwd(), "DESCRIPTION")
+  if (file.exists(local_desc)) {
+    desc <- read.dcf(local_desc, fields = c("Package", "Version"))
+    if (identical(desc[1, "Package"], "scipR")) {
+      version <- desc[1, "Version"]
+      if (!is.na(version) && nzchar(version)) {
+        return(version)
+      }
+    }
+  }
+
+  "0.0.0-dev"
+}

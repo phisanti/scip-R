@@ -351,7 +351,7 @@ build_metadata_message <- function(metadata) {
 
   tool_info <- RProtoBuf::new(RProtoBuf::P("scip.ToolInfo"))
   tool_info$name <- "scip-r"
-  tool_info$version <- "0.0.1-dev"
+  tool_info$version <- scip_r_version()
   meta_msg$tool_info <- tool_info
 
   meta_msg$project_root <- metadata$project_uri %||% metadata$project_root

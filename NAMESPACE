@@ -2,6 +2,7 @@
 
 export(index_project)
 export(install_scip_cli)
+export(validate_args)
 importFrom(Rcpp,sourceCpp)
 importFrom(utils,getParseData)
 importFrom(utils,head)

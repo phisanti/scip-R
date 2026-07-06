@@ -1,15 +1,24 @@
 # This test covers serializer lifecycle from initialization to closure.
 # It confirms document accumulation and output persistence for downstream use.
-# Future enhancements should compare serialized content with golden fixtures.
 
-testthat::test_that("serializer writes RDS artifact", {
-  tmp <- tempfile()
+testthat::test_that("serializer writes readable SCIP protobuf artifact", {
+  tmp <- tempfile(fileext = ".scip")
   ws <- analyze_workspace(tempdir())
   ser <- init_serializer(tmp, ws)
-  write_document(ser, list(relative_path = "script.R"))
+  write_document(ser, list(relative_path = "script.R", language = "R"))
   write_externals(ser, list())
   path <- close_serializer(ser)
   testthat::expect_true(file.exists(path))
+
+  index <- RProtoBuf::read(RProtoBuf::P("scip.Index"), path)
+  testthat::expect_equal(index$metadata$tool_info$name, "scip-r")
+  testthat::expect_equal(
+    unname(index$metadata$tool_info$version),
+    unname(scip_r_version())
+  )
+  testthat::expect_length(index$documents, 1)
+  testthat::expect_equal(index$documents[[1]]$relative_path, "script.R")
+  testthat::expect_equal(index$documents[[1]]$language, "R")
 })
 
 
