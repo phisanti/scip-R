@@ -1,11 +1,13 @@
+# Qualified symbol extraction for namespace-aware navigation.
+# Resolves `pkg::symbol` and `pkg:::symbol` forms and collects external
+# dependencies.
+# Inventory: `look_backward()`, `extract_qualified_symbols()`,
+# `collect_external_symbols()`.
+
 #' @include parser.R
 #' @include parse-tree-utils.R
 #' @include parse-lookup.R
 NULL
-
-# This module detects package-qualified symbol calls (pkg::symbol and pkg:::symbol).
-# It extracts the regex pattern from languageserver for parsing namespace operators.
-# Enables accurate cross-package navigation and internal API usage tracking.
 
 #' Parse text backward to extract package-qualified symbol information.
 #'

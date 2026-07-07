@@ -1,11 +1,11 @@
+# S3 symbol extraction for object-oriented R code.
+# Detects generics, methods, and method dispatch metadata for SCIP.
+# Inventory: `detect_s3_generic()`, `extract_s3_symbols()`,
+# `build_s3_symbol_entries()`.
+
 #' @include parser.R
 #' @include parse-tree-utils.R
 NULL
-
-# This module detects S3 object-oriented programming patterns in R code.
-# It identifies S3 generics (functions using UseMethod) and S3 methods
-# (functions following the generic.class naming convention).
-# Enables accurate method dispatch navigation and class hierarchy tracking.
 
 #' Detect if a function definition contains UseMethod call.
 #'

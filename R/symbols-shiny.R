@@ -1,11 +1,11 @@
+# Shiny symbol extraction for application modules.
+# Detects modules, reactive constructs, outputs, and namespace usage for SCIP.
+# Inventory: `extract_shiny_symbols()`, `build_shiny_symbol_entries()`,
+# `build_shiny_symbol_id()`.
+
 #' @include parser.R
 #' @include parse-tree-utils.R
 NULL
-
-# This module detects Shiny application patterns in R code.
-# It identifies Shiny modules (moduleServer, NS), reactive values,
-# observers, and UI/server component definitions.
-# Enables navigation and understanding of Shiny application structure.
 
 #' Extract Shiny-specific symbols from an AST module.
 #'

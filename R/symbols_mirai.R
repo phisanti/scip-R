@@ -1,3 +1,9 @@
+# Mirai-backed symbol resolution for scip-r.
+# Resolves documents in parallel while reusing the shared symbol table and
+# downstream document builders.
+# Inventory: `resolve_documents_mirai()`, `wait_for_daemons()`,
+# `mirai_online_daemons()`, `collect_with_watchdog()`.
+
 #' @include benchmark.R
 #' @include parser.R
 #' @include symbol-table.R
@@ -5,14 +11,6 @@
 #' @include occurrences.R
 #' @include diagnostics.R
 NULL
-
-# This script introduces mirai-powered parallel symbol resolution for documents.
-# It evaluates parsing, symbol extraction, and document construction concurrently.
-#
-# Architecture for cross-file resolution:
-# 1. Parse all files serially (fast, I/O bound)
-# 2. Build symbol table serially (requires all parsed files)
-# 3. Resolve symbols in parallel with shared symbol table
 
 #' Resolve documents in parallel using mirai daemons.
 #'

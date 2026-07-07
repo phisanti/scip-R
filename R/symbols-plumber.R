@@ -1,22 +1,11 @@
+# Plumber route extraction for SCIP indexing.
+# Detects annotated route handlers, synthesizes symbol names, and emits route
+# definitions for navigation.
+# Inventory: `extract_plumber_symbols()`, `build_plumber_symbol_entries()`.
+
 #' @include parser.R
 #' @include parse-lookup.R
 NULL
-
-# This module detects plumber REST API route handlers in R source files.
-# Plumber routes are declared as a block of `#*` annotation comments followed
-# by a bare, anonymous `function(...)` expression with no name binding, e.g.:
-#
-#   #* Get gene metadata for a dataset
-#   #* @tag data
-#   #* @get /dataset/<id>
-#   #* @serializer unboxedJSON
-#   function(id, res) { ... }
-#
-# Because the handler is anonymous, the main resolver emits no symbol or
-# occurrence for it, so the entire REST API surface is invisible to SCIP.
-# This extractor synthesizes a navigable symbol from the HTTP method + route
-# path (e.g. `GET_dataset_id`), emits a definition occurrence at the
-# `function` keyword, and folds the full annotation block into documentation.
 
 # HTTP method annotations that mark a block as a route handler.
 PLUMBER_METHODS <- c("get", "post", "put", "delete", "patch", "head")

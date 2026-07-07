@@ -1,3 +1,10 @@
+# Core symbol resolution for scip-r.
+# Resolves definitions and references, then delegates to specialized extractors
+# for language-specific constructs and cross-file linking.
+# Inventory: `resolve_symbols()`, `resolve_symbol_id_fast()`,
+# `is_function_definition_indexed()`, `determine_symbol_kind_indexed()`,
+# `merge_external_refs()`.
+
 #' @include utils.R
 #' @include benchmark.R
 #' @include parser.R
@@ -15,35 +22,6 @@
 #' @include symbols-closures.R
 #' @include symbols-serialize.R
 NULL
-
-# =============================================================================
-# SYMBOL RESOLUTION MODULE
-# =============================================================================
-#
-# This module extracts symbol definitions and references from parsed R ASTs,
-# producing SCIP-compatible symbol information and occurrence records.
-#
-# ARCHITECTURE:
-#   1. Core symbol resolution has two implementations:
-#      - C++ (src/symbol_resolve.cpp): Used by default for performance (~2x faster)
-#      - R (this file): Serves as fallback and reference implementation
-#
-#   2. Specialized symbol extraction (always in R):
-#      - S3 generics/methods: symbols-s3.R
-#      - S4 classes/methods: symbols-s4.R
-#      - R6 classes: symbols-r6.R
-#      - Shiny modules: symbols-shiny.R
-#      - Package-qualified refs: symbols-qualified.R
-#
-# MAINTENANCE:
-#   - The C++ implementation mirrors the R logic; keep them in sync
-#   - Test changes with: R CMD INSTALL . && index playbase
-#   - Compare outputs with: scripts/compare_scip_indexes.R
-#
-# SEE ALSO:
-#   - src/symbol_resolve.cpp (Phase 4B section) for C++ implementation
-#   - symbol-table.R for cross-file resolution infrastructure
-# =============================================================================
 
 #' Resolve symbols present in an AST module.
 #'

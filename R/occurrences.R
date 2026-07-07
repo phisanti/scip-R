@@ -1,11 +1,13 @@
+# Occurrence construction for SCIP documents.
+# Converts resolved symbols into ranges and document payloads with enclosing
+# context.
+# Inventory: `map_occurrences()`, `compute_enclosing_range()`,
+# `build_document()`.
+
 #' @include utils.R
 #' @include symbols.R
 #' @include parse-tree-utils.R
 NULL
-
-# This script constructs occurrence records and document payloads for SCIP.
-# It consumes symbol tables to map definitions and references with ranges.
-# Includes enclosing range computation for AST context.
 
 #' Map occurrences from resolved symbols and AST module.
 #'

@@ -1,9 +1,9 @@
+# Roxygen documentation extraction for parsed source files.
+# Pulls doc comment blocks before symbol definitions for SCIP serialization.
+# Inventory: `extract_roxygen_documentation()`, `extract_docs_for_range()`.
+
 #' @include parser.R
 NULL
-
-# This module extracts roxygen2 documentation from R source files.
-# It scans parse data for comment tokens (#') preceding symbol definitions
-# and returns the documentation as character vectors for SCIP serialization.
 
 #' Extract roxygen2 documentation for a symbol.
 #'

@@ -1,8 +1,8 @@
-NULL
+# Diagnostics aggregation for parsing and indexing.
+# Normalizes warnings and lint output into SCIP-compatible diagnostic records.
+# Inventory: `collect_diagnostics()`.
 
-# This script aggregates diagnostics generated during parsing and analysis.
-# It normalizes warnings and lint results into SCIP-compatible structures.
-# Future implementations should integrate lintr and condition handling hooks.
+NULL
 
 #' Collect diagnostics for a source file.
 #'

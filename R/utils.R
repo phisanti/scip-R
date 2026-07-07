@@ -1,7 +1,8 @@
-NULL
+# Shared utility helpers for scip-r.
+# Provides package-wide operators and small helpers used across modules.
+# Inventory: `%||%`, `escape_scip_identifier()`, `scip_r_version()`.
 
-# This script provides utility functions shared across the scip-r package.
-# It centralizes common helper operators and functions to avoid duplication.
+NULL
 
 #' Default operator for NULL or empty values.
 #'

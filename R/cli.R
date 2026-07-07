@@ -1,28 +1,8 @@
-NULL
+# CLI installation utilities for scip-r.
+# Installs or updates the `scip-r` launcher and keeps the PATH wrapper aligned.
+# Inventory: `install_scip_cli()`.
 
-# ============================================================================
-# CLI Installation Utilities for scip-r
-# ============================================================================
-#
-# This module provides utilities for installing the scip-r CLI tool to the
-# system PATH. The primary CLI implementation lives in:
-#   - exec/scip-r.R       (Rapp-based CLI entry point)
-#   - R/orchestration.R   (Core indexing pipeline orchestration)
-#
-# The CLI is automatically installed via .onLoad() hook (see R/zzz.R), but
-# users can manually reinstall or install to custom locations using the
-# install_scip_cli() function below.
-#
-# Migration History:
-# - parse_cli_args()            -> REMOVED (Rapp handles parsing in exec/scip-r.R)
-# - run_cli()                   -> REMOVED (exec/scip-r.R calls index_project directly)
-# - index_project()             -> MOVED to R/orchestration.R
-# - index_documents_sequential() -> MOVED to R/orchestration.R
-# - process_single_file()       -> MOVED to R/orchestration.R
-# - validate_args()             -> MOVED to R/orchestration.R
-# - install_scip_cli()          -> KEPT (primary installation function)
-#
-# ============================================================================
+NULL
 
 #' Install or update the scip-r CLI executable
 #'

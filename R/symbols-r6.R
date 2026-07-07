@@ -1,14 +1,13 @@
+# R6 symbol extraction for object-oriented R code.
+# Detects classes, inheritance, and members from R6 definitions for SCIP.
+# Inventory: `extract_r6_symbols()`, `build_r6_symbol_entries()`,
+# `build_r6_symbol_id()`.
+
 #' @include parser.R
 #' @include parse-tree-utils.R
 #' @include parse-lookup.R
 #' @importFrom utils head
 NULL
-
-# This module detects R6 object-oriented programming patterns in R code.
-# It identifies R6 class definitions created with R6Class() or R6::R6Class(),
-# extracts their structure (public, private, active bindings), and tracks
-# inheritance relationships. Based on languageserver's proven get_expr_type()
-# pattern which uses regex: grepl("(R6:::?)?R6Class", func).
 
 #' Extract R6 class definitions from an AST module.
 #'

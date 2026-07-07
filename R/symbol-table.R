@@ -1,14 +1,14 @@
+# Cross-file symbol table construction for scip-r.
+# Collects package-level definitions, base-symbol allowlists, and reference
+# resolution helpers used by the main resolver.
+# Inventory: `BASE_R_FUNCTIONS`, `build_symbol_table()`,
+# `resolve_symbol_reference()`.
+
 #' @include utils.R
 #' @include parser.R
 #' @include parse-tree-utils.R
 NULL
 
-# This module builds a package-wide symbol table for cross-file reference resolution.
-# It collects all top-level definitions (functions, variables, classes) from all files
-# in a package, enabling references in file A to resolve to definitions in file B.
-
-# Well-known base R functions that should resolve to base:: package
-# This is a curated list of commonly used base R functions
 BASE_R_FUNCTIONS <- c(
   # Core functions
   "c", "list", "vector", "matrix", "array", "data.frame", "factor",

@@ -1,3 +1,10 @@
+# Pipeline orchestration for scip-r indexing.
+# Coordinates workspace analysis, file discovery, parsing, symbol resolution,
+# and SCIP serialization across sequential and parallel paths.
+# Inventory: `index_project()`, `index_documents_sequential()`,
+# `process_single_file()`, `process_single_file_with_table()`,
+# `validate_args()`.
+
 #' @include workspace.R
 #' @include files.R
 #' @include benchmark.R
@@ -8,16 +15,6 @@
 #' @include diagnostics.R
 #' @include serializer.R
 NULL
-
-# Orchestration layer for scip-r indexing pipeline.
-# This module coordinates the end-to-end indexing workflow, from workspace
-# analysis through file discovery, parsing, symbol resolution, and SCIP
-# serialization. It provides both sequential and parallel execution paths.
-#
-# Key architectural change (cross-file references):
-# The pipeline now includes a symbol table building phase between parsing
-# and symbol resolution. This enables cross-file reference tracking by
-# collecting all package-level definitions before resolving references.
 
 #' Index a project and generate a SCIP file.
 #'

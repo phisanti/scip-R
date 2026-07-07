@@ -1,3 +1,9 @@
+# Package initialization hook for scip-r.
+# Registers the CLI wrapper on package load and skips temporary LOCK installs.
+# Inventory: `.onLoad()`.
+
+NULL
+
 #' Package initialization hook
 #'
 #' Registers the scip-r CLI tool via Rapp on every package load.

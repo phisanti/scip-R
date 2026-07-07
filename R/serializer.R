@@ -1,11 +1,13 @@
+# SCIP serialization helpers.
+# Builds protobuf messages and writes documents, diagnostics, and metadata to
+# disk.
+# Inventory: `init_serializer()`, `write_document()`, `write_externals()`,
+# `close_serializer()`.
+
 #' @include utils.R
 #' @include workspace.R
 #' @include symbols.R
 NULL
-
-# This script handles serialization of SCIP data to the target output file.
-# It prepares metadata, builds protobuf messages, and finalizes the index artifact.
-# Future development should extend document population with full symbol data.
 
 #' Initialize a serializer for SCIP output.
 #'

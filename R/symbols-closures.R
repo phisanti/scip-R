@@ -1,6 +1,4 @@
-# =============================================================================
 # LIST CLOSURE DEFINITIONS
-# =============================================================================
 # Split from symbols.R: detection of named function closures assigned as list
 # elements at top level. Move-only; no logic change.
 
@@ -9,19 +7,6 @@
 #' @include parse-lookup.R
 NULL
 
-# ============================================================================
-# LIST CLOSURE DEFINITIONS
-# ============================================================================
-# Detects anonymous closures assigned as named list elements at top level:
-#   MODULE <- list(server = function(id) { ... }, ui = function() { ... })
-#
-# These closures are emitted as local SCIP definitions with EnclosingRange
-# spanning their function body. This enables call graph tools to create
-# caller edges for references inside the closure body.
-#
-# Out of scope: truly anonymous closures (lapply(x, function(x) ...)),
-# env assignments (env$foo <- function()), nested lists.
-# ============================================================================
 
 #' Extract named function closures from top-level list assignments.
 #'

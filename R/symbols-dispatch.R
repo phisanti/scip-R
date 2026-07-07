@@ -1,29 +1,14 @@
-# =============================================================================
-# DYNAMIC DISPATCH CALL EDGES
-# =============================================================================
-# Split from symbols.R: Shiny/Base-R/C dispatch extractors and the unified
-# extract_dynamic_call_edges() orchestrator. Move-only; no logic change.
+# Dynamic dispatch call-edge extraction.
+# Detects Shiny, base-R, and C-style dispatch patterns and resolves their
+# targets for SCIP relationships.
+# Inventory: `extract_dynamic_call_edges()`, `extract_shiny_dispatch_edges()`,
+# `extract_base_dispatch_edges()`, `extract_c_dispatch_edges()`.
 
 #' @include parser.R
 #' @include parse-tree-utils.R
 #' @include parse-lookup.R
 #' @include symbol-table.R
 NULL
-
-# ============================================================================
-# SHINY DYNAMIC DISPATCH CALL EDGES
-# ============================================================================
-# Detects callModule() and moduleServer() patterns and emits SCIP relationship
-# edges to their target functions. This enables call graph tools to show that
-# callModule(BiomarkerBoard, "id") dispatches to BiomarkerBoard().
-#
-# Patterns detected:
-#   callModule(target, id, ...)   - first arg is the module server function
-#   moduleServer(id, target)      - second arg is the module server function
-#
-# Returns relationship structures that can be attached to a symbol's
-# $relationships field for serialization by build_symbol_information_message().
-# ============================================================================
 
 #' Extract Shiny dynamic dispatch call edges.
 #'

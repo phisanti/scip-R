@@ -1,17 +1,13 @@
+# Parse-tree navigation helpers for symbol extraction.
+# Builds reusable tree indexes and descendant lookups for parser consumers.
+# Inventory: `build_tree_index()`, `build_scope_index()`, `get_children_indexed()`,
+# `get_parent_id_indexed()`, `find_ancestor_of_type_indexed()`.
+
 #' @include benchmark.R
 #' @include parser.R
 #' @useDynLib scipR, .registration = TRUE
 #' @importFrom Rcpp sourceCpp
 NULL
-
-# This script provides parse tree navigation utilities for AST analysis.
-# It centralizes tree traversal logic used across symbol detection modules
-# (symbols.R, symbols-s3.R, symbols-r6.R) to avoid duplication and ensure
-# consistent tree navigation patterns throughout the codebase.
-#
-# PERFORMANCE NOTE: For large files, use the indexed variants (_indexed suffix)
-# which use pre-computed lookups instead of scanning the full data frame.
-# Call build_tree_index() once per file, then pass the index to indexed functions.
 
 #' Build a tree index for O(1) parent/child lookups.
 #'

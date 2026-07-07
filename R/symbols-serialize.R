@@ -1,25 +1,9 @@
-# =============================================================================
 # C++ RESULT CONVERTERS / SCIP RANGE SERIALIZATION
-# =============================================================================
 # Split from symbols.R: df_to_symbol_list / df_to_occurrence_list / to_scip_range.
 # Move-only; no logic change.
 
 #' @include parser.R
 NULL
-
-# ============================================================================
-# C++ RESULT CONVERTERS
-# ============================================================================
-# These functions convert the DataFrame output from resolve_symbols_cpp()
-# to the list format expected by downstream code (serializer, relationships).
-#
-# The C++ implementation returns DataFrames for efficiency (columnar storage),
-# but the rest of the R code expects lists of records. These converters bridge
-# that gap.
-#
-# NOTE: This conversion has some overhead, but it's small compared to the
-# time saved by running the main loop in C++.
-# ============================================================================
 
 #' Convert C++ symbols DataFrame to list format.
 #'

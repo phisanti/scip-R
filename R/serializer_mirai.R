@@ -1,11 +1,11 @@
+# Mirai-backed SCIP document serialization.
+# Prepares documents in parallel and streams them into the serializer.
+# Inventory: `serialize_documents_mirai()`.
+
 #' @include utils.R
 #' @include symbols_mirai.R
 #' @include serializer.R
 NULL
-
-# This script combines mirai-based document preparation with final serialization.
-# It parallelises parsing and symbol extraction, then streams results into the serializer.
-# Future revisions might pipeline protobuf writes directly from mirai workers to shared buffers.
 
 #' Create a SCIP index using mirai-prepared documents.
 #'

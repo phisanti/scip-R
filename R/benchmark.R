@@ -1,10 +1,10 @@
+# Benchmarking utilities for scip-r.
+# Records timing and call counts for opt-in performance analysis.
+# Inventory: `bench_init()`, `bench_enabled()`, `bench_start()`, `bench_end()`,
+# `bench_count()`, `bench_report_counts()`, `bench_expr()`.
+
 NULL
 
-# Benchmarking utilities for performance analysis.
-# Provides simple, togglable instrumentation for timing operations and counting calls.
-# Output is JSON Lines format for easy parsing and analysis.
-
-# Internal state for benchmark tracking
 .bench_state <- new.env(parent = emptyenv())
 
 #' Initialize benchmarking state.

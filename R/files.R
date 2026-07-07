@@ -1,29 +1,14 @@
+# File discovery for scip-r indexing.
+# Enumerates `.R` sources, applies ignore and include filters, and tracks
+# incremental cache state for repeat runs.
+# Inventory: `R_SOURCE_PATTERN`, `discover_files()`, `load_cache_state()`,
+# `save_cache_state()`.
+
 #' @include utils.R
 #' @include workspace.R
 NULL
 
-# Regex matching R source files (.R or .r). Single source of truth shared by the
-# directory-pruning walk and the NULL-include fallback so the two never diverge.
 R_SOURCE_PATTERN <- "\\.[Rr]$"
-
-# =============================================================================
-# File Discovery Module
-# =============================================================================
-#
-# Enumerates R source files for SCIP indexing with support for:
-#   - Gitignore/Rbuildignore exclusion patterns
-#   - Include patterns for selective indexing (like scip-go's directory args)
-#   - Incremental indexing via file hash caching
-#
-# Design notes:
-#   - Relative paths are computed BEFORE filtering to handle renv symlinks
-#     that resolve outside the project root (e.g., to ~/.cache/R/renv/...)
-#   - Gitignore semantics use three matching scopes: component (filename),
-#     suffix (trailing path segments), and path (full relative path)
-#   - Directory patterns (trailing /) match any file beneath that directory
-#   - Include patterns act as an allowlist when specified
-#
-# =============================================================================
 
 #' Discover source files for indexing.
 #'

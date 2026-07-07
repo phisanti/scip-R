@@ -1,10 +1,11 @@
+# S4 symbol extraction for object-oriented R code.
+# Detects classes, generics, methods, and slot metadata for SCIP.
+# Inventory: `extract_s4_symbols()`, `build_s4_symbol_entries()`,
+# `build_s4_symbol_id()`.
+
 #' @include parser.R
 #' @include parse-tree-utils.R
 NULL
-
-# This module detects S4 object-oriented programming patterns in R code.
-# It identifies S4 classes (setClass), generics (setGeneric), methods (setMethod),
-# and slot definitions. S4 is R's formal OOP system, widely used in Bioconductor.
 
 #' Extract S4 class definitions from an AST module.
 #'

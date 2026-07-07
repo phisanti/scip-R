@@ -1,10 +1,10 @@
+# Parsing utilities for R source files.
+# Converts source text into parse data and source references for downstream passes.
+# Inventory: `parse_file()`.
+
 #' @include files.R
 #' @importFrom utils getParseData
 NULL
-
-# This script converts R source files into abstract syntax structures for indexing.
-# It wraps base parsing capabilities and normalizes tokens for downstream passes.
-# Future revisions should enrich the IR with scope-aware annotations.
 
 #' Parse an R source file into an AST module representation.
 #'

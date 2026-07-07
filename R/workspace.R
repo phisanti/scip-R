@@ -1,20 +1,9 @@
-NULL
+# Workspace analysis for R projects.
+# Detects project metadata, dependencies, and ignore rules before file discovery.
+# Inventory: `analyze_workspace()`, `detect_project_version()`,
+# `detect_dependencies()`, `detect_ignore_rules()`.
 
-# =============================================================================
-# Workspace Analysis Module
-# =============================================================================
-#
-# This module inspects R project workspaces to extract metadata, dependencies,
-# and file exclusion rules for SCIP indexing. It serves as the foundation for
-# understanding project structure before file discovery begins.
-#
-# Supported project types:
-#   - Standard R packages (DESCRIPTION file)
-#   - renv-managed projects (renv.lock)
-#   - packrat-managed projects (packrat.lock)
-#   - Generic R projects (directory of .R files)
-#
-# =============================================================================
+NULL
 
 #' Analyze workspace metadata and dependencies.
 #'
