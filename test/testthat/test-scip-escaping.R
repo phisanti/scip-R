@@ -60,6 +60,15 @@ test_that("build_global_symbol_id leaves plain names unescaped", {
   expect_equal(sym, "scip-r r playbase 1.0.0 createPGX().")
 })
 
+test_that("build_global_symbol_id uses class descriptors for OO class kinds", {
+  kinds <- c("r6_class", "s4_class", "s7_class")
+
+  for (kind in kinds) {
+    sym <- build_global_symbol_id("Agent.State", "pkg", "1.0.0", kind)
+    expect_equal(sym, "scip-r r pkg 1.0.0 `Agent.State`#")
+  }
+})
+
 # =============================================================================
 # build_local_symbol_id — dotted names
 # =============================================================================

@@ -409,27 +409,12 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
     }
   }
 
-  # Extract R6 class symbols (classes, methods, fields)
-  t_r6 <- bench_start("extract_r6_symbols")
-  r6_symbols <- build_r6_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
-  bench_end(t_r6, list(r6_count = length(r6_symbols)))
-
-  if (length(r6_symbols) > 0) {
-    for (r6_sym in r6_symbols) {
-      symbols[[length(symbols) + 1]] <- r6_sym
-    }
-  }
-
-  # Extract S4 class symbols (classes, generics, methods, slots)
-  t_s4 <- bench_start("extract_s4_symbols")
-  s4_symbols <- build_s4_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
-  bench_end(t_s4, list(s4_count = length(s4_symbols)))
-
-  if (length(s4_symbols) > 0) {
-    for (s4_sym in s4_symbols) {
-      symbols[[length(symbols) + 1]] <- s4_sym
-    }
-  }
+  symbols <- append_oo_symbol_entries(
+    symbols = symbols,
+    ast_module = ast_module,
+    relative_path = relative_path,
+    namespace = workspace$metadata$namespace
+  )
 
   # Extract Shiny symbols (modules, reactives, observers, outputs)
   t_shiny <- bench_start("extract_shiny_symbols")
@@ -749,6 +734,49 @@ determine_symbol_kind_indexed <- function(row, parse_data, index) {
 
   # Default: regular variable
   "variable"
+}
+
+#' Append object-system symbol entries.
+#'
+#' Keeps OO extractor wiring out of `resolve_symbols()` so new object systems can
+#' be added by registering another builder with the same narrow interface.
+#'
+#' @param symbols Existing symbol entries.
+#' @param ast_module Parsed AST module.
+#' @param relative_path Document relative path.
+#' @param namespace Optional namespace prefix for symbol IDs.
+#' @return Symbol entries with OO symbols appended.
+#' @keywords internal
+append_oo_symbol_entries <- function(symbols,
+                                     ast_module,
+                                     relative_path,
+                                     namespace = NULL) {
+  oo_builders <- list(
+    list(
+      bench_name = "extract_r6_symbols",
+      count_name = "r6_count",
+      build = build_r6_symbol_entries
+    ),
+    list(
+      bench_name = "extract_s4_symbols",
+      count_name = "s4_count",
+      build = build_s4_symbol_entries
+    )
+  )
+
+  for (oo_builder in oo_builders) {
+    t_oo <- bench_start(oo_builder$bench_name)
+    oo_symbols <- oo_builder$build(ast_module, relative_path, namespace)
+    bench_metadata <- list()
+    bench_metadata[[oo_builder$count_name]] <- length(oo_symbols)
+    bench_end(t_oo, bench_metadata)
+
+    if (length(oo_symbols) > 0) {
+      symbols <- c(symbols, oo_symbols)
+    }
+  }
+
+  symbols
 }
 
 #' Merge external reference lists from multiple files.

@@ -63,3 +63,24 @@ test_that("scip proto is loadable from install or fallback path", {
   descriptor <- RProtoBuf::P("scip.Index")
   expect_s4_class(descriptor, "Descriptor")
 })
+
+test_that("serializer maps S7 symbol kinds to SCIP kinds", {
+  kind_enum <- RProtoBuf::P("scip.SymbolInformation.Kind")
+  cases <- list(
+    s7_class = as.integer(kind_enum$Class),
+    s7_generic = as.integer(kind_enum$Function),
+    s7_method = as.integer(kind_enum$Method),
+    s7_property = as.integer(kind_enum$Property),
+    s7_constructor = as.integer(kind_enum$Constructor)
+  )
+
+  for (kind in names(cases)) {
+    sym <- build_symbol_information_message(list(
+      symbol = paste0("local s7#", kind),
+      display_name = kind,
+      kind = kind
+    ))
+
+    expect_equal(sym$kind, cases[[kind]])
+  }
+})

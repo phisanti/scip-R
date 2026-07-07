@@ -9,6 +9,8 @@
 #' @include parse-tree-utils.R
 NULL
 
+OO_CLASS_KINDS <- c("r6_class", "s4_class", "s7_class")
+
 BASE_R_FUNCTIONS <- c(
   # Core functions
   "c", "list", "vector", "matrix", "array", "data.frame", "factor",
@@ -196,17 +198,19 @@ build_global_symbol_id <- function(name, package_name, package_version, kind = "
   # Names with non-identifier chars (e.g. dots in R) must be backtick-quoted
   # per the SCIP spec (dots are descriptor delimiters, not identifier chars).
   esc_name <- escape_scip_identifier(name)
-  suffix <- switch(kind,
-    `function` = paste0(esc_name, "()."),
-    call = paste0(esc_name, "()."),
-    s3_generic = paste0(esc_name, "()."),
-    s3_method = paste0(esc_name, "()."),
-    r6_class = paste0(esc_name, "#"),
-    s4_class = paste0(esc_name, "#"),
-    variable = paste0(esc_name, "."),
-    # Default to function-style for unknown kinds
-    paste0(esc_name, "().")
-  )
+  if (kind %in% OO_CLASS_KINDS) {
+    suffix <- paste0(esc_name, "#")
+  } else {
+    suffix <- switch(kind,
+      `function` = paste0(esc_name, "()."),
+      call = paste0(esc_name, "()."),
+      s3_generic = paste0(esc_name, "()."),
+      s3_method = paste0(esc_name, "()."),
+      variable = paste0(esc_name, "."),
+      # Default to function-style for unknown kinds
+      paste0(esc_name, "().")
+    )
+  }
 
   sprintf("scip-r r %s %s %s", package_name, package_version, suffix)
 }

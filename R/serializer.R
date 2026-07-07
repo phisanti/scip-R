@@ -246,6 +246,12 @@ build_symbol_information_message <- function(symbol_entry) {
     s4_generic = as.integer(kind_enum$Function), # 17
     s4_method = as.integer(kind_enum$Method), # 26
     s4_slot = as.integer(kind_enum$Field), # 15
+    # S7 OOP
+    s7_class = as.integer(kind_enum$Class), # 7
+    s7_generic = as.integer(kind_enum$Function), # 17
+    s7_method = as.integer(kind_enum$Method), # 26
+    s7_property = as.integer(kind_enum$Property), # 41
+    s7_constructor = as.integer(kind_enum$Constructor), # 9
     # Shiny patterns
     shiny_module = as.integer(kind_enum$Module), # 27
     shiny_module_function = as.integer(kind_enum$Function), # 17
