@@ -46,6 +46,7 @@ Collate:
     'symbols-shiny.R'
     'symbols-r6.R'
     'symbols-s4.R'
+    'symbols-s7.R'
     'symbols-s3.R'
     'symbols-qualified.R'
     'symbols.R'

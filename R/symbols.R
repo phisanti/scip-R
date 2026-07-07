@@ -16,6 +16,7 @@
 #' @include symbols-s3.R
 #' @include symbols-s4.R
 #' @include symbols-r6.R
+#' @include symbols-s7.R
 #' @include symbols-shiny.R
 #' @include symbols-plumber.R
 #' @include symbols-dispatch.R
@@ -409,12 +410,15 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
     }
   }
 
-  symbols <- append_oo_symbol_entries(
+  oo_entries <- append_oo_symbol_entries(
     symbols = symbols,
+    occurrences = occurrences,
     ast_module = ast_module,
     relative_path = relative_path,
     namespace = workspace$metadata$namespace
   )
+  symbols <- oo_entries$symbols
+  occurrences <- oo_entries$occurrences
 
   # Extract Shiny symbols (modules, reactives, observers, outputs)
   t_shiny <- bench_start("extract_shiny_symbols")
@@ -748,6 +752,7 @@ determine_symbol_kind_indexed <- function(row, parse_data, index) {
 #' @return Symbol entries with OO symbols appended.
 #' @keywords internal
 append_oo_symbol_entries <- function(symbols,
+                                     occurrences = list(),
                                      ast_module,
                                      relative_path,
                                      namespace = NULL) {
@@ -761,12 +766,24 @@ append_oo_symbol_entries <- function(symbols,
       bench_name = "extract_s4_symbols",
       count_name = "s4_count",
       build = build_s4_symbol_entries
+    ),
+    list(
+      bench_name = "extract_s7_symbols",
+      count_name = "s7_count",
+      build = build_s7_symbol_entries
     )
   )
 
   for (oo_builder in oo_builders) {
     t_oo <- bench_start(oo_builder$bench_name)
-    oo_symbols <- oo_builder$build(ast_module, relative_path, namespace)
+    oo_result <- oo_builder$build(ast_module, relative_path, namespace)
+    if (!is.null(oo_result$symbols) || !is.null(oo_result$occurrences)) {
+      oo_symbols <- oo_result$symbols %||% list()
+      oo_occurrences <- oo_result$occurrences %||% list()
+    } else {
+      oo_symbols <- oo_result
+      oo_occurrences <- list()
+    }
     bench_metadata <- list()
     bench_metadata[[oo_builder$count_name]] <- length(oo_symbols)
     bench_end(t_oo, bench_metadata)
@@ -774,9 +791,12 @@ append_oo_symbol_entries <- function(symbols,
     if (length(oo_symbols) > 0) {
       symbols <- c(symbols, oo_symbols)
     }
+    if (length(oo_occurrences) > 0) {
+      occurrences <- c(occurrences, oo_occurrences)
+    }
   }
 
-  symbols
+  list(symbols = symbols, occurrences = occurrences)
 }
 
 #' Merge external reference lists from multiple files.
