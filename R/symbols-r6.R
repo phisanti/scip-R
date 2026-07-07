@@ -160,6 +160,9 @@ extract_r6_class_info <- function(call_row, data, lookup) {
   # Extract active bindings
   active_members <- extract_members_r6(descendants, data, "active", lookup)
 
+  class_name_range <- extract_r6_assignment_range(full_call_expr, lookup) %||%
+    extract_r6_string_range(descendants)
+
   list(
     type = "r6_class",
     class_name = class_name,
@@ -167,7 +170,9 @@ extract_r6_class_info <- function(call_row, data, lookup) {
     public_members = public_members,
     private_members = private_members,
     active_members = active_members,
-    range = c(call_row$line1, call_row$col1, call_row$line2, call_row$col2)
+    member_references = extract_r6_member_references(descendants, lookup),
+    range = c(full_call_expr$line1[1], full_call_expr$col1[1], full_call_expr$line2[1], full_call_expr$col2[1]),
+    name_range = class_name_range
   )
 }
 
@@ -333,7 +338,13 @@ extract_members_r6 <- function(descendants, data, member_type, lookup) {
 
             members[[length(members) + 1]] <- list(
               name = member_name,
-              is_method = is_method
+              is_method = is_method,
+              name_range = c(
+                symbol_lhs$line1[nrow(symbol_lhs)],
+                symbol_lhs$col1[nrow(symbol_lhs)],
+                symbol_lhs$line2[nrow(symbol_lhs)],
+                symbol_lhs$col2[nrow(symbol_lhs)]
+              )
             )
           }
         }
@@ -366,26 +377,30 @@ extract_members_r6 <- function(descendants, data, member_type, lookup) {
 #' @param ast_module Parsed AST module (from parse_file).
 #' @param relative_path Document relative path for symbol IDs.
 #' @param namespace Optional namespace prefix for symbol IDs.
-#' @return List of symbol entries with symbol, display_name, kind fields.
+#' @return List with `symbols` and `occurrences` entries.
 #' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "my_r6.R", relative_path = "my_r6.R"))
-#' symbols <- build_r6_symbol_entries(ast, "my_r6.R", NULL)
+#' entries <- build_r6_symbol_entries(ast, "my_r6.R", NULL)
 #' }
 build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL) {
   r6_classes <- extract_r6_symbols(ast_module)
 
   if (length(r6_classes) == 0) {
-    return(list())
+    return(list(symbols = list(), occurrences = list()))
   }
 
   data <- ast_module$parse_data
   symbols <- list()
+  occurrences <- list()
+  class_symbols <- new.env(hash = TRUE, parent = emptyenv())
+  member_symbols <- new.env(hash = TRUE, parent = emptyenv())
 
   for (class_info in r6_classes) {
     # Build class symbol ID using the helper from symbols.R
     class_symbol <- build_r6_symbol_id(class_info$class_name, relative_path, namespace)
+    class_symbols[[class_info$class_name]] <- class_symbol
 
     # Add class symbol
     symbols[[length(symbols) + 1]] <- list(
@@ -394,33 +409,22 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
       kind = "r6_class",
       documentation = extract_roxygen_documentation(data, class_info$range[1])
     )
+    occurrences[[length(occurrences) + 1]] <- r6_occurrence(
+      class_symbol,
+      class_info$name_range,
+      "definition"
+    )
 
     # Process public members (list of {name, is_method} info)
     if (!is.null(class_info$public_members) && length(class_info$public_members) > 0) {
       for (member_info in class_info$public_members) {
-        member_name <- member_info$name
-        is_method <- member_info$is_method
-
-        # Determine kind and suffix based on is_method flag
-        if (member_name == "initialize") {
-          kind <- "r6_constructor"
-          suffix <- "()."
-        } else if (is_method) {
-          kind <- "r6_method"
-          suffix <- "()."
-        } else {
-          kind <- "r6_field"
-          suffix <- "."
-        }
-
-        member_symbol <- paste0(class_symbol, "#", escape_scip_identifier(member_name), suffix)
-
-        symbols[[length(symbols) + 1]] <- list(
-          symbol = member_symbol,
-          display_name = member_name,
-          kind = kind,
-          documentation = NULL,
-          enclosing_symbol = class_symbol
+        entry <- r6_member_symbol_entry(class_info$class_name, class_symbol, member_info, "public")
+        member_symbols[[entry$key]] <- entry$symbol$symbol
+        symbols[[length(symbols) + 1]] <- entry$symbol
+        occurrences[[length(occurrences) + 1]] <- r6_occurrence(
+          entry$symbol$symbol,
+          member_info$name_range,
+          "definition"
         )
       }
     }
@@ -428,26 +432,13 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
     # Process private members (list of {name, is_method} info)
     if (!is.null(class_info$private_members) && length(class_info$private_members) > 0) {
       for (member_info in class_info$private_members) {
-        member_name <- member_info$name
-        is_method <- member_info$is_method
-
-        # Use is_method flag to determine kind
-        if (is_method) {
-          kind <- "r6_method"
-          suffix <- "()."
-        } else {
-          kind <- "r6_field"
-          suffix <- "."
-        }
-
-        member_symbol <- paste0(class_symbol, "#", escape_scip_identifier(member_name), suffix)
-
-        symbols[[length(symbols) + 1]] <- list(
-          symbol = member_symbol,
-          display_name = member_name,
-          kind = kind,
-          documentation = NULL,
-          enclosing_symbol = class_symbol
+        entry <- r6_member_symbol_entry(class_info$class_name, class_symbol, member_info, "private")
+        member_symbols[[entry$key]] <- entry$symbol$symbol
+        symbols[[length(symbols) + 1]] <- entry$symbol
+        occurrences[[length(occurrences) + 1]] <- r6_occurrence(
+          entry$symbol$symbol,
+          member_info$name_range,
+          "definition"
         )
       }
     }
@@ -455,21 +446,32 @@ build_r6_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
     # Process active bindings (list of {name, is_method} info, treat as properties)
     if (!is.null(class_info$active_members) && length(class_info$active_members) > 0) {
       for (member_info in class_info$active_members) {
-        member_name <- member_info$name
-        member_symbol <- paste0(class_symbol, "#", escape_scip_identifier(member_name), ".")
+        entry <- r6_member_symbol_entry(class_info$class_name, class_symbol, member_info, "active")
+        member_symbols[[entry$key]] <- entry$symbol$symbol
+        symbols[[length(symbols) + 1]] <- entry$symbol
+        occurrences[[length(occurrences) + 1]] <- r6_occurrence(
+          entry$symbol$symbol,
+          member_info$name_range,
+          "definition"
+        )
+      }
+    }
 
-        symbols[[length(symbols) + 1]] <- list(
-          symbol = member_symbol,
-          display_name = member_name,
-          kind = "r6_active",
-          documentation = NULL,
-          enclosing_symbol = class_symbol
+    for (reference in class_info$member_references) {
+      member_symbol <- r6_member_reference_symbol(member_symbols, class_info$class_name, reference)
+      if (!is.null(member_symbol)) {
+        occurrences[[length(occurrences) + 1]] <- r6_occurrence(
+          member_symbol,
+          reference$range,
+          "reference"
         )
       }
     }
   }
 
-  symbols
+  occurrences <- append_r6_constructor_references(occurrences, data, class_symbols, member_symbols)
+
+  list(symbols = symbols, occurrences = occurrences)
 }
 
 #' Build a SCIP symbol identifier for R6 classes.
@@ -494,4 +496,174 @@ build_r6_symbol_id <- function(name, relative_path, namespace = NULL) {
   } else {
     sprintf("local %s#%s", base_path, esc_name)
   }
+}
+
+r6_member_symbol_entry <- function(class_name, class_symbol, member_info, scope) {
+  member_name <- member_info$name
+
+  if (identical(scope, "active")) {
+    kind <- "r6_active"
+    suffix <- "."
+  } else if (member_name == "initialize" && identical(scope, "public")) {
+    kind <- "r6_constructor"
+    suffix <- "()."
+  } else if (isTRUE(member_info$is_method)) {
+    kind <- "r6_method"
+    suffix <- "()."
+  } else {
+    kind <- "r6_field"
+    suffix <- "."
+  }
+
+  member_symbol <- paste0(class_symbol, "#", escape_scip_identifier(member_name), suffix)
+  list(
+    key = r6_member_key(class_name, scope, member_name),
+    symbol = list(
+      symbol = member_symbol,
+      display_name = paste0(class_name, "$", member_name),
+      kind = kind,
+      documentation = NULL,
+      enclosing_symbol = class_symbol
+    )
+  )
+}
+
+r6_member_key <- function(class_name, scope, member_name) {
+  paste(class_name, scope, member_name, sep = "\r")
+}
+
+r6_member_reference_symbol <- function(member_symbols, class_name, reference) {
+  member_symbol <- member_symbols[[r6_member_key(class_name, reference$scope, reference$name)]]
+  if (!is.null(member_symbol) || reference$scope != "public") {
+    return(member_symbol)
+  }
+
+  member_symbols[[r6_member_key(class_name, "active", reference$name)]]
+}
+
+r6_occurrence <- function(symbol, range, role) {
+  list(
+    symbol = symbol,
+    range = c(range[1] - 1L, range[2] - 1L, range[3] - 1L, range[4]),
+    role = role
+  )
+}
+
+extract_r6_assignment_range <- function(full_call_expr, lookup) {
+  assignment_parent <- rows_by_id_lookup(full_call_expr$parent[1], lookup)
+  if (nrow(assignment_parent) == 0) {
+    return(NULL)
+  }
+
+  siblings <- rows_by_parent_lookup(assignment_parent$id[1], lookup)
+  assignment_rows <- siblings[siblings$token %in% c("LEFT_ASSIGN", "EQ_ASSIGN"), , drop = FALSE]
+  if (nrow(assignment_rows) == 0) {
+    return(NULL)
+  }
+
+  assign_row <- assignment_rows[1, ]
+  lhs_exprs <- siblings[siblings$token == "expr" &
+    (siblings$line1 < assign_row$line1 |
+      (siblings$line1 == assign_row$line1 & siblings$col1 < assign_row$col1)), , drop = FALSE]
+  if (nrow(lhs_exprs) == 0) {
+    return(NULL)
+  }
+
+  lhs_exprs <- lhs_exprs[order(lhs_exprs$line1, lhs_exprs$col1), , drop = FALSE]
+  lhs_descendants <- get_descendants_lookup(lhs_exprs$id[nrow(lhs_exprs)], lookup)
+  lhs_symbols <- lhs_descendants[lhs_descendants$token == "SYMBOL", , drop = FALSE]
+  if (nrow(lhs_symbols) == 0) {
+    return(NULL)
+  }
+
+  lhs_symbols <- lhs_symbols[order(lhs_symbols$line1, lhs_symbols$col1), , drop = FALSE]
+  c(lhs_symbols$line1[1], lhs_symbols$col1[1], lhs_symbols$line2[1], lhs_symbols$col2[1])
+}
+
+extract_r6_string_range <- function(descendants) {
+  str_const_rows <- descendants[descendants$token == "STR_CONST", , drop = FALSE]
+  if (nrow(str_const_rows) == 0) {
+    return(NULL)
+  }
+  c(str_const_rows$line1[1], str_const_rows$col1[1], str_const_rows$line2[1], str_const_rows$col2[1])
+}
+
+extract_r6_member_references <- function(descendants, lookup) {
+  candidate_rows <- descendants[descendants$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL"), , drop = FALSE]
+  references <- list()
+
+  for (i in seq_len(nrow(candidate_rows))) {
+    row <- candidate_rows[i, ]
+    receiver <- r6_dollar_receiver(row, lookup)
+    if (is.null(receiver) || !(receiver %in% c("self", "private"))) {
+      next
+    }
+
+    references[[length(references) + 1]] <- list(
+      scope = if (receiver == "private") "private" else "public",
+      name = row$text,
+      range = c(row$line1, row$col1, row$line2, row$col2)
+    )
+  }
+
+  references
+}
+
+r6_dollar_receiver <- function(member_row, lookup) {
+  siblings <- rows_by_parent_lookup(member_row$parent[1], lookup)
+  dollar_rows <- siblings[siblings$token == "'$'", , drop = FALSE]
+  if (nrow(dollar_rows) == 0) {
+    return(NULL)
+  }
+
+  receiver_exprs <- siblings[siblings$token == "expr" &
+    (siblings$line1 < dollar_rows$line1[1] |
+      (siblings$line1 == dollar_rows$line1[1] & siblings$col1 < dollar_rows$col1[1])), , drop = FALSE]
+  if (nrow(receiver_exprs) == 0) {
+    return(NULL)
+  }
+
+  receiver_exprs <- receiver_exprs[order(receiver_exprs$line1, receiver_exprs$col1), , drop = FALSE]
+  receiver_descendants <- get_descendants_lookup(receiver_exprs$id[nrow(receiver_exprs)], lookup)
+  receiver_symbols <- receiver_descendants[receiver_descendants$token == "SYMBOL", , drop = FALSE]
+  if (nrow(receiver_symbols) == 0) {
+    return(NULL)
+  }
+
+  receiver_symbols$text[1]
+}
+
+append_r6_constructor_references <- function(occurrences, data, class_symbols, member_symbols) {
+  if (is.null(data) || nrow(data) == 0) {
+    return(occurrences)
+  }
+
+  lookup <- build_lookup_index(data)
+  new_calls <- data[data$token == "SYMBOL_FUNCTION_CALL" & data$text == "new", , drop = FALSE]
+  for (i in seq_len(nrow(new_calls))) {
+    new_row <- new_calls[i, ]
+    receiver <- r6_dollar_receiver(new_row, lookup)
+    if (is.null(receiver)) {
+      next
+    }
+
+    class_symbol <- class_symbols[[receiver]]
+    constructor_symbol <- member_symbols[[r6_member_key(receiver, "public", "initialize")]]
+    if (is.null(class_symbol) || is.null(constructor_symbol)) {
+      next
+    }
+
+    occurrences[[length(occurrences) + 1]] <- r6_occurrence(
+      class_symbol,
+      c(new_row$line1, new_row$col1 - nchar(receiver) - 1L, new_row$line1, new_row$col1 - 2L),
+      "reference"
+    )
+    occurrences[[length(occurrences) + 1]] <- r6_occurrence(
+      constructor_symbol,
+      c(new_row$line1, new_row$col1, new_row$line2, new_row$col2),
+      "reference"
+    )
+  }
+
+  occurrences
 }

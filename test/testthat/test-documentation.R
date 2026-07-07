@@ -208,7 +208,7 @@ testthat::test_that("R6 class symbols include roxygen documentation", {
   ), tmp)
 
   ast <- parse_file(list(path = tmp, relative_path = "r6_class.R"))
-  symbols <- build_r6_symbol_entries(ast, "r6_class.R", NULL)
+  symbols <- build_r6_symbol_entries(ast, "r6_class.R", NULL)$symbols
 
   cls <- Filter(function(s) s$kind == "r6_class", symbols)
   expect_gte(length(cls), 1)
@@ -253,7 +253,7 @@ testthat::test_that("undocumented OOP symbols have NULL documentation, not error
 
   s3 <- build_s3_symbol_entries(ast, "no_docs.R", NULL)
   s4 <- build_s4_symbol_entries(ast, "no_docs.R", NULL)
-  r6 <- build_r6_symbol_entries(ast, "no_docs.R", NULL)
+  r6 <- build_r6_symbol_entries(ast, "no_docs.R", NULL)$symbols
 
   # All should succeed without error and have NULL docs
   for (sym in c(s3, s4, r6)) {

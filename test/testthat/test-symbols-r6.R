@@ -520,6 +520,105 @@ test_that("generates correct SCIP descriptors for R6 symbols", {
   expect_true(any(grepl("Person#greet\\(\\)\\.", descriptor_strings)))
 })
 
+test_that("build_r6_symbol_entries emits class-owned definitions and references", {
+  tmp_dir <- tempfile("scip_r6_occurrences_")
+  dir.create(tmp_dir)
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+  file_path <- file.path(tmp_dir, "r6_occurrences.R")
+  writeLines(c(
+    "Person <- R6::R6Class('Person',",
+    "  public = list(",
+    "    initialize = function(name) { self$name <- name; private$.touch() },",
+    "    name = NULL,",
+    "    greet = function() self$name,",
+    "    get_label = function() self$label",
+    "  ),",
+    "  private = list(",
+    "    .touch = function() private$count <- private$count + 1,",
+    "    count = 0",
+    "  ),",
+    "  active = list(",
+    "    label = function(value) self$name",
+    "  )",
+    ")",
+    "",
+    "person <- Person$new('Ada')"
+  ), file_path)
+
+  ast <- parse_file(list(path = file_path, relative_path = "r6_occurrences.R"))
+  entries <- build_r6_symbol_entries(ast, "r6_occurrences.R", NULL)
+
+  class_symbol <- build_r6_symbol_id("Person", "r6_occurrences.R", NULL)
+  constructor_symbol <- paste0(class_symbol, "#initialize().")
+  greet_symbol <- paste0(class_symbol, "#greet().")
+  name_symbol <- paste0(class_symbol, "#name.")
+  touch_symbol <- paste0(class_symbol, "#`.touch`().")
+  count_symbol <- paste0(class_symbol, "#count.")
+  label_symbol <- paste0(class_symbol, "#label.")
+
+  symbols_by_id <- stats::setNames(entries$symbols, vapply(entries$symbols, `[[`, character(1), "symbol"))
+  testthat::expect_equal(symbols_by_id[[class_symbol]]$kind, "r6_class")
+  testthat::expect_equal(symbols_by_id[[constructor_symbol]]$kind, "r6_constructor")
+  testthat::expect_equal(symbols_by_id[[greet_symbol]]$kind, "r6_method")
+  testthat::expect_equal(symbols_by_id[[name_symbol]]$kind, "r6_field")
+  testthat::expect_equal(symbols_by_id[[touch_symbol]]$kind, "r6_method")
+  testthat::expect_equal(symbols_by_id[[count_symbol]]$kind, "r6_field")
+  testthat::expect_equal(symbols_by_id[[label_symbol]]$kind, "r6_active")
+  testthat::expect_equal(symbols_by_id[[greet_symbol]]$display_name, "Person$greet")
+
+  definitions <- Filter(function(x) identical(x$role, "definition"), entries$occurrences)
+  references <- Filter(function(x) identical(x$role, "reference"), entries$occurrences)
+
+  definition_symbols <- vapply(definitions, `[[`, character(1), "symbol")
+  reference_symbols <- vapply(references, `[[`, character(1), "symbol")
+
+  testthat::expect_true(class_symbol %in% definition_symbols)
+  testthat::expect_true(constructor_symbol %in% definition_symbols)
+  testthat::expect_true(greet_symbol %in% definition_symbols)
+  testthat::expect_true(name_symbol %in% definition_symbols)
+  testthat::expect_true(touch_symbol %in% definition_symbols)
+  testthat::expect_true(count_symbol %in% definition_symbols)
+  testthat::expect_true(label_symbol %in% definition_symbols)
+  class_definition <- definitions[[which(definition_symbols == class_symbol)[1]]]
+  testthat::expect_equal(class_definition$range, c(0, 0, 0, 6))
+
+  testthat::expect_true(class_symbol %in% reference_symbols)
+  testthat::expect_true(constructor_symbol %in% reference_symbols)
+  testthat::expect_true(name_symbol %in% reference_symbols)
+  testthat::expect_true(touch_symbol %in% reference_symbols)
+  testthat::expect_true(count_symbol %in% reference_symbols)
+  testthat::expect_true(label_symbol %in% reference_symbols)
+})
+
+test_that("R6 symbols and occurrences integrate into resolve_symbols", {
+  tmp_dir <- tempfile("scip_r6_resolve_")
+  dir.create(tmp_dir)
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+  file_path <- file.path(tmp_dir, "r6_resolve.R")
+  writeLines(c(
+    "Widget <- R6::R6Class('Widget',",
+    "  public = list(",
+    "    initialize = function(value) self$value <- value,",
+    "    value = NULL,",
+    "    read = function() self$value",
+    "  )",
+    ")"
+  ), file_path)
+
+  ast <- parse_file(list(path = file_path, relative_path = "r6_resolve.R"))
+  workspace <- list(metadata = list(namespace = NULL), dependencies = list())
+  result <- resolve_symbols(ast, workspace, track_externals = FALSE)
+
+  r6_symbols <- Filter(function(s) grepl("^r6_", s$kind), result$symbols)
+  r6_occurrences <- Filter(function(o) grepl("#Widget", o$symbol), result$occurrences)
+
+  testthat::expect_gte(length(r6_symbols), 4)
+  testthat::expect_true(any(vapply(r6_occurrences, function(o) identical(o$role, "definition"), logical(1))))
+  testthat::expect_true(any(vapply(r6_occurrences, function(o) identical(o$role, "reference"), logical(1))))
+})
+
 # ============================================================================
 # Level 6: Performance Benchmark
 # ============================================================================
