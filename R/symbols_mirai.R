@@ -17,12 +17,13 @@ NULL
 #' Uses a three-phase approach for cross-file reference resolution:
 #' 1. Parse all files (serial - I/O bound, fast)
 #' 2. Build symbol table (serial - needs all files)
-#' 3. Resolve and serialize in parallel (CPU bound)
+#' 3. Resolve and build document bundles in parallel (CPU bound)
 #'
 #' @param files List of file descriptors from `discover_files()`.
 #' @param workspace Workspace context obtained via `analyze_workspace()`.
 #' @param daemons Number of mirai daemons to launch (defaults to physical cores).
-#' @return A list of lists, each containing `document` and `diagnostics` entries.
+#' @return A list of bundles, each containing `document`, `diagnostics`, and
+#'   `external_refs` entries.
 #' @keywords internal
 #' @examples
 #' \dontrun{

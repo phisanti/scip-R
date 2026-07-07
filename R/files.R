@@ -1,6 +1,6 @@
 # File discovery for scip-r indexing.
-# Enumerates `.R` sources, applies ignore and include filters, and tracks
-# incremental cache state for repeat runs.
+# Enumerates `.R` and `.r` sources, applies ignore and include filters, and
+# tracks incremental cache state for repeat runs.
 # Inventory: `R_SOURCE_PATTERN`, `discover_files()`, `load_cache_state()`,
 # `save_cache_state()`.
 
@@ -12,8 +12,8 @@ R_SOURCE_PATTERN <- "\\.[Rr]$"
 
 #' Discover source files for indexing.
 #'
-#' Enumerates all `.R` files under the project root, applies exclusion rules
-#' from `.gitignore` and `.Rbuildignore`, optionally filters by include
+#' Enumerates all `.R` and `.r` files under the project root, applies
+#' exclusion rules from `.gitignore` and `.Rbuildignore`, optionally filters by include
 #' patterns, and maintains a cache manifest for incremental indexing.
 #'
 #' @param workspace Workspace list produced by `analyze_workspace()`.

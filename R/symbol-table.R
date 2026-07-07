@@ -94,8 +94,11 @@ BASE_R_FUNCTIONS <- c(
 #'   \describe{
 #'     \item{definitions}{Named list mapping symbol name -> definition info}
 #'     \item{exports}{Character vector of exported symbol names (from NAMESPACE)}
+#'     \item{definitions_env}{Environment for O(1) definition lookups}
+#'     \item{exports_env}{Environment for O(1) export lookups}
 #'     \item{package_name}{Package name from workspace}
 #'     \item{package_version}{Package version from workspace}
+#'     \item{tree_indices}{Per-file tree indices for phase 3 reuse}
 #'   }
 #' @keywords internal
 build_symbol_table <- function(parsed_files, workspace) {

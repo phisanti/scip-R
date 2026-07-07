@@ -7,8 +7,8 @@ NULL
 #' Install or update the scip-r CLI executable
 #'
 #' Normally, the `scip-r` command is installed automatically when the
-#' scipR package is installed. Use this function if you need to
-#' reinstall the CLI tool or install it to a custom location.
+#' package loads. Use this function if you need to reinstall the CLI tool or
+#' install it to a custom location.
 #'
 #' @param destdir Destination directory for the CLI launcher.
 #'                If `NULL`, uses Rapp's default behavior (respects

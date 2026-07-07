@@ -14,6 +14,7 @@ NULL
 #' @param output_path Destination `.scip` path.
 #' @param daemons Number of mirai daemons for document preparation.
 #' @param bundles Optional pre-computed document bundles.
+#'   Each bundle may contain `document`, `diagnostics`, and `external_refs`.
 #' @return Invisibly returns the output path.
 #' @keywords internal
 #' @examples
