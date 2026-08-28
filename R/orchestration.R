@@ -80,14 +80,38 @@ index_project <- function(cfg) {
   effective_parallel <- cfg$parallel %||% 0L
 
   # Route to appropriate backend
+  #
+  # BUG FIX (Architext-0kdq): the parallel branch had no error handling, so a
+  # mirai failure killed the whole run even though the sequential path would
+  # have produced the same index.
+  # Root cause: mirai::daemons() needs sockets to launch workers. In sandboxed
+  # or restricted worker environments the daemons never connect, and
+  # wait_for_daemons() cli_aborts after 30s. Callers cannot avoid this:
+  # semquery appends --parallel automatically at >=50 R files with no opt-out,
+  # so an aborted run drops the R SCIP shard and every downstream answer
+  # (audit, dead code, duplicates) silently comes from a stale index.
+  # Anti-regression tests: test/testthat/test-orchestration.R
+  #   - "index_project falls back to sequential when the mirai path aborts"
+  #   - "the fallback warns instead of failing silently"
+  #   - "the sequential fallback receives the parallel path's inputs"
+  #   - "a successful parallel run never touches the sequential path"
   result <- if (effective_parallel > 0) {
     # Parallel mode: use mirai for symbol resolution and serialization
     # Benchmarks show ~40-50x speedup on larger repos (40+ files)
-    serialize_documents_mirai(
-      plan$files,
-      workspace,
-      cfg$output,
-      daemons = effective_parallel
+    tryCatch(
+      serialize_documents_mirai(
+        plan$files,
+        workspace,
+        cfg$output,
+        daemons = effective_parallel
+      ),
+      error = function(e) {
+        cli::cli_alert_warning(c(
+          "Parallel resolution failed: {conditionMessage(e)}"
+        ))
+        cli::cli_alert_info("Falling back to sequential indexing.")
+        index_documents_sequential(plan$files, workspace, cfg$output)
+      }
     )
   } else {
     # Sequential mode: single-threaded processing

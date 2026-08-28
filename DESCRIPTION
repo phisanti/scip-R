@@ -16,13 +16,13 @@ Depends: R (>= 3.6)
 LinkingTo: Rcpp
 Imports:
     cli,
+    mirai,
     Rcpp,
     RProtoBuf,
     Rapp,
     stringi
 Suggests:
     digest,
-    mirai,
     testthat (>= 3.0.0)
 LazyData: false
 RoxygenNote: 7.3.3.9000
