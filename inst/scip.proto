@@ -12,7 +12,10 @@ syntax = "proto3";
 
 package scip;
 
-option go_package = "github.com/sourcegraph/scip/bindings/go/scip/";
+option go_package = "github.com/scip-code/scip/bindings/go/scip/";
+option java_multiple_files = true;
+option java_outer_classname = "ScipProto";
+option java_package = "org.scip_code.scip";
 
 // Index represents a complete SCIP index for a workspace this is rooted at a
 // single directory. An Index message payload can have a large memory footprint
@@ -95,13 +98,11 @@ message Document {
   // Relationship.is_definition).
   repeated SymbolInformation symbols = 3;
 
-  // (optional) Text contents of the this document. Indexers are not expected to
-  // include the text by default. It's preferrable that clients read the text
+  // (optional) Text contents of this document. Indexers are not expected to
+  // include the text by default. It's preferable that clients read the text
   // contents from the file system by resolving the absolute path from joining
-  // `Index.metadata.project_root` and `Document.relative_path`. This field was
-  // introduced to support `SymbolInformation.signature_documentation`, but it
-  // can be used for other purposes as well, for example testing or when working
-  // with virtual/in-memory documents.
+  // `Index.metadata.project_root` and `Document.relative_path`. This field
+  // can be useful for testing or when working with virtual/in-memory documents.
   string text = 5;
 
   // Specifies the encoding used for source ranges in this Document.
@@ -210,7 +211,7 @@ message Descriptor {
     // NOTE: This corresponds to a package in Go and JVM languages.
     Namespace = 1;
     // Use Namespace instead.
-    Package = 1 [deprecated=true];
+    Package = 1 [deprecated = true];
     Type = 2;
     Term = 3;
     Method = 4;
@@ -226,6 +227,25 @@ message Descriptor {
   Suffix suffix = 3;
   // NOTE: If you add new fields here, make sure to update the prepareSlot()
   // function responsible for parsing symbols.
+}
+
+// Signature represents the signature of a symbol as it's displayed in API
+// documentation or hover tooltips. It uses a subset of Document's fields with
+// the same field numbers for wire compatibility with older indexes that encoded
+// signatures using the Document message type.
+message Signature {
+  // The language of the signature, e.g. "java", "go", "python".
+  string language = 4;
+  // The text content of the signature, e.g. "void add(int a, int b)".
+  string text = 5;
+  // (optional) Occurrences within the signature text that reference other
+  // symbols, enabling hyperlinking of types in the signature. Ranges are
+  // relative to the `text` field.
+  repeated Occurrence occurrences = 2;
+
+  // Reserved field numbers from the Document message to prevent accidental
+  // reuse, which would break wire compatibility with older indexes.
+  reserved 1, 3, 6;
 }
 
 // SymbolInformation defines metadata about a symbol, such as the symbol's
@@ -262,148 +282,148 @@ message SymbolInformation {
   // - If two symbols have the same Kind, they should share the same Suffix.
   // - If two symbols have different Suffixes, they should have different Kinds.
   enum Kind {
-      UnspecifiedKind = 0;
-      // A method which may or may not have a body. For Java, Kotlin etc.
-      AbstractMethod = 66;
-      // For Ruby's attr_accessor
-      Accessor = 72;
-      Array = 1;
-      // For Alloy
-      Assertion = 2;
-      AssociatedType = 3;
-      // For C++
-      Attribute = 4;
-      // For Lean
-      Axiom = 5;
-      Boolean = 6;
-      Class = 7;
-      // For C++
-      Concept = 86;
-      Constant = 8;
-      Constructor = 9;
-      // For Solidity
-      Contract = 62;
-      // For Haskell
-      DataFamily = 10;
-      // For C# and F#
-      Delegate = 73;
-      Enum = 11;
-      EnumMember = 12;
-      Error = 63;
-      Event = 13;
-      // For Dart
-      Extension = 84;
-      // For Alloy
-      Fact = 14;
-      Field = 15;
-      File = 16;
-      Function = 17;
-      // For 'get' in Swift, 'attr_reader' in Ruby
-      Getter = 18;
-      // For Raku
-      Grammar = 19;
-      // For Purescript and Lean
-      Instance = 20;
-      Interface = 21;
-      Key = 22;
-      // For Racket
-      Lang = 23;
-      // For Lean
-      Lemma = 24;
-      // For solidity
-      Library = 64;
-      Macro = 25;
-      Method = 26;
-      // For Ruby
-      MethodAlias = 74;
-      // Analogous to 'ThisParameter' and 'SelfParameter', but for languages
-      // like Go where the receiver doesn't have a conventional name.
-      MethodReceiver = 27;
-      // Analogous to 'AbstractMethod', for Go.
-      MethodSpecification = 67;
-      // For Protobuf
-      Message = 28;
-      // For Dart
-      Mixin = 85;
-      // For Solidity
-      Modifier = 65;
-      Module = 29;
-      Namespace = 30;
-      Null = 31;
-      Number = 32;
-      Object = 33;
-      Operator = 34;
-      Package = 35;
-      PackageObject = 36;
-      Parameter = 37;
-      ParameterLabel = 38;
-      // For Haskell's PatternSynonyms
-      Pattern = 39;
-      // For Alloy
-      Predicate = 40;
-      Property = 41;
-      // Analogous to 'Trait' and 'TypeClass', for Swift and Objective-C
-      Protocol = 42;
-      // Analogous to 'AbstractMethod', for Swift and Objective-C.
-      ProtocolMethod = 68;
-      // Analogous to 'AbstractMethod', for C++.
-      PureVirtualMethod = 69;
-      // For Haskell
-      Quasiquoter = 43;
-      // 'self' in Python, Rust, Swift etc.
-      SelfParameter = 44;
-      // For 'set' in Swift, 'attr_writer' in Ruby
-      Setter = 45;
-      // For Alloy, analogous to 'Struct'.
-      Signature = 46;
-      // For Ruby
-      SingletonClass = 75;
-      // Analogous to 'StaticMethod', for Ruby.
-      SingletonMethod = 76;
-      // Analogous to 'StaticField', for C++
-      StaticDataMember = 77;
-      // For C#
-      StaticEvent = 78;
-      // For C#
-      StaticField = 79;
-      // For Java, C#, C++ etc.
-      StaticMethod = 80;
-      // For C#, TypeScript etc.
-      StaticProperty = 81;
-      // For C, C++
-      StaticVariable = 82;
-      String = 48;
-      Struct = 49;
-      // For Swift
-      Subscript = 47;
-      // For Lean
-      Tactic = 50;
-      // For Lean
-      Theorem = 51;
-      // Method receiver for languages
-      // 'this' in JavaScript, C++, Java etc.
-      ThisParameter = 52;
-      // Analogous to 'Protocol' and 'TypeClass', for Rust, Scala etc.
-      Trait = 53;
-      // Analogous to 'AbstractMethod', for Rust, Scala etc.
-      TraitMethod = 70;
-      // Data type definition for languages like OCaml which use `type`
-      // rather than separate keywords like `struct` and `enum`.
-      Type = 54;
-      TypeAlias = 55;
-      // Analogous to 'Trait' and 'Protocol', for Haskell, Purescript etc.
-      TypeClass = 56;
-      // Analogous to 'AbstractMethod', for Haskell, Purescript etc.
-      TypeClassMethod = 71;
-      // For Haskell
-      TypeFamily = 57;
-      TypeParameter = 58;
-      // For C, C++, Capn Proto
-      Union = 59;
-      Value = 60;
-      Variable = 61;
-      // Next = 87;
-      // Feel free to open a PR proposing new language-specific kinds.
+    UnspecifiedKind = 0;
+    // A method which may or may not have a body. For Java, Kotlin etc.
+    AbstractMethod = 66;
+    // For Ruby's attr_accessor
+    Accessor = 72;
+    Array = 1;
+    // For Alloy
+    Assertion = 2;
+    AssociatedType = 3;
+    // For C++
+    Attribute = 4;
+    // For Lean
+    Axiom = 5;
+    Boolean = 6;
+    Class = 7;
+    // For C++
+    Concept = 86;
+    Constant = 8;
+    Constructor = 9;
+    // For Solidity
+    Contract = 62;
+    // For Haskell
+    DataFamily = 10;
+    // For C# and F#
+    Delegate = 73;
+    Enum = 11;
+    EnumMember = 12;
+    Error = 63;
+    Event = 13;
+    // For Dart
+    Extension = 84;
+    // For Alloy
+    Fact = 14;
+    Field = 15;
+    File = 16;
+    Function = 17;
+    // For 'get' in Swift, 'attr_reader' in Ruby
+    Getter = 18;
+    // For Raku
+    Grammar = 19;
+    // For Purescript and Lean
+    Instance = 20;
+    Interface = 21;
+    Key = 22;
+    // For Racket
+    Lang = 23;
+    // For Lean
+    Lemma = 24;
+    // For solidity
+    Library = 64;
+    Macro = 25;
+    Method = 26;
+    // For Ruby
+    MethodAlias = 74;
+    // Analogous to 'ThisParameter' and 'SelfParameter', but for languages
+    // like Go where the receiver doesn't have a conventional name.
+    MethodReceiver = 27;
+    // Analogous to 'AbstractMethod', for Go.
+    MethodSpecification = 67;
+    // For Protobuf
+    Message = 28;
+    // For Dart
+    Mixin = 85;
+    // For Solidity
+    Modifier = 65;
+    Module = 29;
+    Namespace = 30;
+    Null = 31;
+    Number = 32;
+    Object = 33;
+    Operator = 34;
+    Package = 35;
+    PackageObject = 36;
+    Parameter = 37;
+    ParameterLabel = 38;
+    // For Haskell's PatternSynonyms
+    Pattern = 39;
+    // For Alloy
+    Predicate = 40;
+    Property = 41;
+    // Analogous to 'Trait' and 'TypeClass', for Swift and Objective-C
+    Protocol = 42;
+    // Analogous to 'AbstractMethod', for Swift and Objective-C.
+    ProtocolMethod = 68;
+    // Analogous to 'AbstractMethod', for C++.
+    PureVirtualMethod = 69;
+    // For Haskell
+    Quasiquoter = 43;
+    // 'self' in Python, Rust, Swift etc.
+    SelfParameter = 44;
+    // For 'set' in Swift, 'attr_writer' in Ruby
+    Setter = 45;
+    // For Alloy, analogous to 'Struct'.
+    Signature = 46;
+    // For Ruby
+    SingletonClass = 75;
+    // Analogous to 'StaticMethod', for Ruby.
+    SingletonMethod = 76;
+    // Analogous to 'StaticField', for C++
+    StaticDataMember = 77;
+    // For C#
+    StaticEvent = 78;
+    // For C#
+    StaticField = 79;
+    // For Java, C#, C++ etc.
+    StaticMethod = 80;
+    // For C#, TypeScript etc.
+    StaticProperty = 81;
+    // For C, C++
+    StaticVariable = 82;
+    String = 48;
+    Struct = 49;
+    // For Swift
+    Subscript = 47;
+    // For Lean
+    Tactic = 50;
+    // For Lean
+    Theorem = 51;
+    // Method receiver for languages
+    // 'this' in JavaScript, C++, Java etc.
+    ThisParameter = 52;
+    // Analogous to 'Protocol' and 'TypeClass', for Rust, Scala etc.
+    Trait = 53;
+    // Analogous to 'AbstractMethod', for Rust, Scala etc.
+    TraitMethod = 70;
+    // Data type definition for languages like OCaml which use `type`
+    // rather than separate keywords like `struct` and `enum`.
+    Type = 54;
+    TypeAlias = 55;
+    // Analogous to 'Trait' and 'Protocol', for Haskell, Purescript etc.
+    TypeClass = 56;
+    // Analogous to 'AbstractMethod', for Haskell, Purescript etc.
+    TypeClassMethod = 71;
+    // For Haskell
+    TypeFamily = 57;
+    TypeParameter = 58;
+    // For C, C++, Capn Proto
+    Union = 59;
+    Value = 60;
+    Variable = 61;
+    // Next = 87;
+    // Feel free to open a PR proposing new language-specific kinds.
   }
   // (optional) The name of this symbol as it should be displayed to the user.
   // For example, the symbol "com/example/MyClass#myMethod(+1)." should have the
@@ -417,11 +437,11 @@ message SymbolInformation {
   string display_name = 6;
   // (optional) The signature of this symbol as it's displayed in API
   // documentation or in hover tooltips. For example, a Java method that adds
-  // two numbers this would have `Document.language = "java"` and `Document.text
-  // = "void add(int a, int b)". The `language` and `text` fields are required
-  // while other fields such as `Documentation.occurrences` can be optionally
-  // included to support hyperlinking referenced symbols in the signature.
-  Document signature_documentation = 7;
+  // two numbers would have `Signature.language = "java"` and
+  // `Signature.text = "void add(int a, int b)"`. The `language` and `text`
+  // fields are required while `occurrences` can be optionally included to
+  // support hyperlinking referenced symbols in the signature.
+  Signature signature_documentation = 7;
   // (optional) The enclosing symbol if this is a local symbol.  For non-local
   // symbols, the enclosing symbol should be parsed from the `symbol` field
   // using the `Descriptor` grammar.
@@ -441,7 +461,6 @@ message SymbolInformation {
   // symbol.
   string enclosing_symbol = 8;
 }
-
 
 message Relationship {
   string symbol = 1;
@@ -493,10 +512,6 @@ message Relationship {
   // of mixins, you can use is_definition to relate the symbol to the
   // matching symbol in ancestor classes, and is_reference to relate the
   // symbol to the matching symbol in mixins.
-  //
-  // NOTE: At the moment, due to limitations of the SCIP to LSIF conversion,
-  // only global symbols in an index are allowed to use is_definition.
-  // The relationship may not get recorded if either symbol is local.
   bool is_definition = 5;
   // Update registerInverseRelationships on adding a new field here.
 }
@@ -545,7 +560,7 @@ enum SyntaxKind {
 
   // `if`, `else`, `return`, `class`, etc.
   Keyword = 4;
-  IdentifierKeyword = 4 [deprecated=true];
+  IdentifierKeyword = 4 [deprecated = true];
 
   // `+`, `*`, etc.
   IdentifierOperator = 5;
@@ -571,7 +586,7 @@ enum SyntaxKind {
   // NOTE: This corresponds to a package in Go and JVM languages,
   // and a module in languages like Python and JavaScript.
   IdentifierNamespace = 14;
-  IdentifierModule = 14 [deprecated=true];
+  IdentifierModule = 14 [deprecated = true];
 
   // Function references, including calls
   IdentifierFunction = 15;
@@ -625,36 +640,86 @@ enum SyntaxKind {
   TagDelimiter = 36;
 }
 
+// SingleLineRange represents a half-open [start, end) range within a single line.
+//
+// Line numbers and characters are always 0-based. Make sure to increment them
+// before displaying in an editor-like UI because editors conventionally use
+// 1-based numbers. The `character` values are interpreted based on the
+// `PositionEncoding` for the enclosing Document.
+message SingleLineRange {
+  int32 line = 1;
+  int32 start_character = 2;
+  int32 end_character = 3;
+}
+
+// MultiLineRange represents a half-open [start, end) range spanning multiple lines.
+//
+// Line numbers and characters are always 0-based. Make sure to increment them
+// before displaying in an editor-like UI because editors conventionally use
+// 1-based numbers. The `character` values are interpreted based on the
+// `PositionEncoding` for the enclosing Document.
+//
+// Producers SHOULD use `SingleLineRange` when `start_line == end_line` to keep
+// indexes compact, but consumers MUST accept multi-line encoding even when the
+// range happens to fit on a single line.
+message MultiLineRange {
+  int32 start_line = 1;
+  int32 start_character = 2;
+  int32 end_line = 3;
+  int32 end_character = 4;
+}
+
 // Occurrence associates a source position with a symbol and/or highlighting
 // information.
 //
 // If possible, indexers should try to bundle logically related information
 // across occurrences into a single occurrence to reduce payload sizes.
+//
+// Range encoding:
+//
+// An Occurrence carries its source range in one of two ways: the deprecated
+// `range` field (a `repeated int32` packed encoding kept for backward
+// compatibility), or one of the typed alternatives in the `typed_range`
+// oneof. New producers SHOULD set `typed_range` and SHOULD NOT set the
+// deprecated `range` field. The same rule applies to `enclosing_range` and
+// `typed_enclosing_range`.
+//
+// When both encodings are present on the same Occurrence, `typed_range` takes
+// precedence over `range` (likewise `typed_enclosing_range` over
+// `enclosing_range`). Producers that set both forms MUST keep them
+// semantically equivalent. Consumers SHOULD prefer the typed form when
+// available and fall back to the `repeated int32` form otherwise.
 message Occurrence {
-  // Half-open [start, end) range of this occurrence. Must be exactly three or four
-  // elements:
+  // Deprecated: Use `single_line_range` or `multi_line_range` instead.
   //
+  // Half-open [start, end) range. Must be exactly three or four elements:
+  // - Three elements: `[startLine, startCharacter, endCharacter]` (single-line)
   // - Four elements: `[startLine, startCharacter, endLine, endCharacter]`
-  // - Three elements: `[startLine, startCharacter, endCharacter]`. The end line
-  //   is inferred to have the same value as the start line.
   //
-  // It is allowed for the range to be empty (i.e. start==end).
-  //
-  // Line numbers and characters are always 0-based. Make sure to increment the
-  // line/character values before displaying them in an editor-like UI because
-  // editors conventionally use 1-based numbers.
-  //
-  // The 'character' value is interpreted based on the PositionEncoding for
-  // the Document.
+  // The end line of a three-element range is inferred to equal the start line.
   //
   // Historical note: the original draft of this schema had a `Range` message
   // type with `start` and `end` fields of type `Position`, mirroring LSP.
   // Benchmarks revealed that this encoding was inefficient and that we could
   // reduce the total payload size of an index by 50% by using `repeated int32`
-  // instead. The `repeated int32` encoding is admittedly more embarrassing to
-  // work with in some programming languages but we hope the performance
-  // improvements make up for it.
-  repeated int32 range = 1;
+  // instead. However, the lack of type safety led to the introduction of
+  // `single_line_range` and `multi_line_range` as typed alternatives; the
+  // typed encoding's per-index size overhead is small (single-digit percent)
+  // because ranges are only a fraction of a typical index payload.
+  repeated int32 range = 1 [deprecated = true];
+
+  // Half-open [start, end) source range of this occurrence.
+  //
+  // It is allowed for the range to be empty (i.e. start==end).
+  //
+  // When both `typed_range` and the deprecated `range` field are set,
+  // `typed_range` takes precedence.
+  oneof typed_range {
+    // Range spanning a single line.
+    SingleLineRange single_line_range = 8;
+    // Range spanning multiple lines.
+    MultiLineRange multi_line_range = 9;
+  }
   // (optional) The symbol that appears at this position. See
   // `SymbolInformation.symbol` for how to format symbols as strings.
   string symbol = 2;
@@ -674,12 +739,15 @@ message Occurrence {
   SyntaxKind syntax_kind = 5;
   // (optional) Diagnostics that have been reported for this specific range.
   repeated Diagnostic diagnostics = 6;
-  // (optional) Using the same encoding as the sibling `range` field, half-open
-  // source range of the nearest non-trivial enclosing AST node. This range must
-  // enclose the `range` field. Example applications that make use of the
-  // enclosing_range field:
+  // Deprecated: Use `typed_enclosing_range` instead.
   //
-  // - Call hierarchies: to determine what symbols are references from the body
+  // Uses the same `repeated int32` encoding as the deprecated `range` field.
+  repeated int32 enclosing_range = 7 [deprecated = true];
+
+  // (optional) Half-open source range of the nearest non-trivial enclosing AST
+  // node. This range must enclose the occurrence range. Example applications:
+  //
+  // - Call hierarchies: to determine what symbols are referenced from the body
   //   of a function
   // - Symbol outline: to display breadcrumbs from the cursor position to the
   //   root of the file
@@ -726,7 +794,15 @@ message Occurrence {
   //                   ^ range
   //           ^^^^^^^^^^^^^ enclosing_range
   // ```
-  repeated int32 enclosing_range = 7;
+  //
+  // When both `typed_enclosing_range` and the deprecated `enclosing_range`
+  // field are set, `typed_enclosing_range` takes precedence.
+  oneof typed_enclosing_range {
+    // Enclosing range spanning a single line.
+    SingleLineRange single_line_enclosing_range = 10;
+    // Enclosing range spanning multiple lines.
+    MultiLineRange multi_line_enclosing_range = 11;
+  }
 }
 
 // Represents a diagnostic, such as a compiler error or warning, which should be
@@ -815,7 +891,7 @@ enum Language {
   JavaScript = 22;
   JavaScriptReact = 93;
   Jsonnet = 76;
-  Julia =  55;
+  Julia = 55;
   Justfile = 109;
   Kotlin = 4;
   LaTeX = 83;
@@ -831,6 +907,7 @@ enum Language {
   OCaml = 41;
   Objective_C = 36;
   Objective_CPP = 37;
+  Odin = 111; // https://odin-lang.org/
   Pascal = 99;
   PHP = 19;
   PLSQL = 70;
@@ -875,7 +952,7 @@ enum Language {
   XSL = 32;
   YAML = 74;
   Zig = 38;
-  // NextLanguage = 111;
+  // NextLanguage = 112;
   // Steps add a new language:
   // 1. Copy-paste the "NextLanguage = N" line above
   // 2. Increment "NextLanguage = N" to "NextLanguage = N+1"
