@@ -1,7 +1,7 @@
 # S3 symbol extraction for object-oriented R code.
 # Detects generics, methods, and method dispatch metadata for SCIP.
 # Inventory: `detect_s3_generic()`, `extract_s3_symbols()`,
-# `build_s3_symbol_entries()`.
+# `build_s3_annotations()`.
 
 #' @include parser.R
 #' @include parse-tree-utils.R
@@ -129,16 +129,16 @@ parse_s3_method_name <- function(func_name) {
     }
   }
 
-  # Fallback: try splitting on first dot
-  # This is heuristic and may include false positives
-  parts <- strsplit(func_name, "\\.", fixed = FALSE)[[1]]
-  if (length(parts) >= 2) {
+  # A leading dot is part of the generic name, not a generic/class separator.
+  # .compute_ci is a helper; .dispatch.value can be a method of .dispatch.
+  separator <- regexpr(".", substring(func_name, 2L), fixed = TRUE)[1] + 1L
+  if (separator > 1L && separator < nchar(func_name)) {
     # Only consider it a method if it looks like a function (not a variable)
     # We rely on caller context to determine if it's a function definition
     return(list(
       is_method = TRUE,
-      generic_name = parts[1],
-      class_name = paste(parts[-1], collapse = ".")
+      generic_name = substr(func_name, 1L, separator - 1L),
+      class_name = substring(func_name, separator + 1L)
     ))
   }
 
@@ -286,22 +286,22 @@ s3_to_scip <- function(s3_info, workspace) {
   )
 }
 
-#' Convert S3 symbol info into SCIP-compatible symbol entries.
+#' Build located S3 annotations for the main symbol resolver.
 #'
 #' Takes the output of extract_s3_symbols() and converts it into a list of
-#' symbol entries suitable for SCIP serialization.
+#' annotations without independently constructing symbol identities.
 #'
 #' @param ast_module Parsed AST module (from parse_file).
-#' @param relative_path Document relative path for symbol IDs.
-#' @param namespace Optional namespace prefix for symbol IDs.
-#' @return List of symbol entries with symbol, display_name, kind fields.
+#' @return List of annotations with display_name, kind, documentation and range.
+#'   The main resolver owns symbol identity; these annotations are joined to its
+#'   definition occurrences by their SCIP source range.
 #' @keywords internal
 #' @examples
 #' \dontrun{
 #' ast <- parse_file(list(path = "my_s3.R", relative_path = "my_s3.R"))
-#' symbols <- build_s3_symbol_entries(ast, "my_s3.R", NULL)
+#' annotations <- build_s3_annotations(ast)
 #' }
-build_s3_symbol_entries <- function(ast_module, relative_path, namespace = NULL) {
+build_s3_annotations <- function(ast_module) {
   s3_infos <- extract_s3_symbols(ast_module)
 
   if (length(s3_infos) == 0) {
@@ -312,13 +312,10 @@ build_s3_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
   symbols <- list()
 
   for (s3_info in s3_infos) {
-    # Build symbol ID
     if (s3_info$type == "s3_generic") {
-      symbol_id <- build_s3_symbol_id(s3_info$func_name, relative_path, namespace)
       display_name <- s3_info$func_name
       kind <- "s3_generic"
     } else if (s3_info$type == "s3_method") {
-      symbol_id <- build_s3_symbol_id(s3_info$method_name, relative_path, namespace)
       display_name <- s3_info$method_name
       kind <- "s3_method"
     } else {
@@ -326,36 +323,12 @@ build_s3_symbol_entries <- function(ast_module, relative_path, namespace = NULL)
     }
 
     symbols[[length(symbols) + 1]] <- list(
-      symbol = symbol_id,
       display_name = display_name,
       kind = kind,
-      documentation = extract_roxygen_documentation(data, s3_info$range[1])
+      documentation = extract_roxygen_documentation(data, s3_info$range[1]),
+      range = to_scip_range(s3_info$range[1], s3_info$range[2], s3_info$range[3], s3_info$range[4])
     )
   }
 
   symbols
-}
-
-#' Build a SCIP symbol identifier for S3 symbols.
-#'
-#' Helper function to construct SCIP symbol IDs in the correct format.
-#'
-#' @param name Symbol name.
-#' @param relative_path Document path.
-#' @param namespace Optional namespace.
-#' @return Character symbol ID.
-#' @keywords internal
-build_s3_symbol_id <- function(name, relative_path, namespace = NULL) {
-  # Remove file extension and replace slashes/hyphens with underscores
-  base_path <- gsub("\\.R$", "", relative_path)
-  base_path <- gsub("/", "_", base_path)
-  base_path <- gsub("-", "_", base_path)
-
-  # Build local symbol ID (backtick-quote dotted R names per SCIP spec)
-  esc_name <- escape_scip_identifier(name)
-  if (!is.null(namespace) && nzchar(namespace)) {
-    sprintf("%s %s#%s", namespace, base_path, esc_name)
-  } else {
-    sprintf("local %s#%s", base_path, esc_name)
-  }
 }

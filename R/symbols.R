@@ -94,6 +94,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
 
   # Get definitions_env from symbol_table for O(1) lookups
   definitions_env <- if (!is.null(symbol_table)) symbol_table$definitions_env else NULL
+  lexical_symbols <- build_lexical_symbol_map(data, tree_index, relative_path)
 
   # ============================================================================
   # C++ IMPLEMENTATION (Phase 4B)
@@ -121,6 +122,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         tree_index_ptr = tree_index$cpp_index,
         inside_function = tree_index$inside_function %||% logical(nrow(data)),
         enclosing_function = tree_index$enclosing_function %||% integer(nrow(data)),
+        lexical_symbols = lexical_symbols,
         definitions_env = definitions_env %||% new.env(hash = TRUE, parent = emptyenv()),
         base_r_funcs = BASE_R_FUNCTIONS,
         relative_path = relative_path,
@@ -312,7 +314,8 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         local_registry = local_symbol_registry,
         local_counter_env = environment(), # For updating local_counter
         enclosing_name = enclosing_name,
-        qualified_pkg = qualified_pkg
+        qualified_pkg = qualified_pkg,
+        lexical_id = lexical_symbols[get_row_indexed(row$id, tree_index)]
       )
 
       # For definitions in this file, check if we've already seen this symbol
@@ -389,23 +392,30 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
     }
   }
 
-  # Extract S3 symbols (generics and methods)
+  # BUG FIX (Architext-xegg): S3 metadata created duplicate, positionless IDs.
+  # The S3 builder invented local IDs unrelated to the resolver's definitions.
+  # Join by definition range, retaining package/local identity and references.
+  # Anti-regression tests: test/testthat/test-symbols-s3-identity.R
+  #   - S3 metadata reuses located package identities
+  #   - S3 annotations keep same-named nested definitions separate
+  #   - serialized S3 symbols have one located identity and preserved documentation
   t_s3 <- bench_start("extract_s3_symbols")
-  s3_symbols <- build_s3_symbol_entries(ast_module, relative_path, workspace$metadata$namespace)
-  bench_end(t_s3, list(s3_count = length(s3_symbols)))
+  s3_annotations <- build_s3_annotations(ast_module)
+  bench_end(t_s3, list(s3_count = length(s3_annotations)))
 
-  if (length(s3_symbols) > 0) {
-    # Merge S3 symbols into main symbol list
-    # Check for duplicates - prefer S3-specific kind over generic function
-    for (s3_sym in s3_symbols) {
-      existing_idx <- which(sapply(symbols, function(s) s$symbol == s3_sym$symbol))
-
-      if (length(existing_idx) > 0) {
-        # Update existing symbol with S3-specific kind
-        symbols[[existing_idx]]$kind <- s3_sym$kind
-      } else {
-        # Add new S3 symbol
-        symbols[[length(symbols) + 1]] <- s3_sym
+  if (length(s3_annotations) > 0) {
+    definitions <- Filter(function(occ) identical(occ$role, "definition"), occurrences)
+    definition_keys <- vapply(definitions, function(occ) paste(occ$range, collapse = ":"), character(1))
+    symbol_ids <- vapply(symbols, function(symbol) symbol$symbol, character(1))
+    for (annotation in s3_annotations) {
+      definition_idx <- match(paste(annotation$range, collapse = ":"), definition_keys)
+      if (is.na(definition_idx)) next
+      symbol_idx <- match(definitions[[definition_idx]]$symbol, symbol_ids)
+      if (!is.na(symbol_idx)) {
+        symbols[[symbol_idx]]$kind <- annotation$kind
+        if (length(annotation$documentation) > 0) {
+          symbols[[symbol_idx]]$documentation <- annotation$documentation
+        }
       }
     }
   }
@@ -582,12 +592,16 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
 #' @param definitions_env Environment from symbol_table$definitions_env (or NULL).
 #' @param local_registry Environment for lazy local symbol creation.
 #' @param local_counter_env Environment containing local_counter variable.
+#' @param enclosing_name Enclosing function name for fallback local IDs.
+#' @param qualified_pkg Explicit namespace, if present.
+#' @param lexical_id Nearest lexical binding ID, or empty for package/base lookup.
 #' @return Symbol ID string.
 #' @keywords internal
 resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
                                    is_call, relative_path, definitions_env,
                                    local_registry, local_counter_env,
-                                   enclosing_name = NULL, qualified_pkg = NULL) {
+                                   enclosing_name = NULL, qualified_pkg = NULL,
+                                   lexical_id = "") {
   bench_count("phase3_resolve_fast")
 
   # Explicit pkg::func() — highest priority; the programmer stated the package.
@@ -604,15 +618,16 @@ resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
     return(build_external_symbol_id(name, qualified_pkg, "0.0.0", kind))
   }
 
+  if (nzchar(lexical_id)) return(lexical_id)
+
   # If no definitions_env, fall back to local symbol
   if (is.null(definitions_env)) {
     bench_count("phase3_fast_no_table")
     return(build_local_symbol_id(name, relative_path, scope_id = enclosing_name))
   }
 
-  # For truly local symbols (params, loop vars, vars inside functions),
-  # use local symbol IDs unless it's a function call that might resolve globally
-  if (is_local_scope && is_definition && kind != "function") {
+  # Local definitions always retain local identity, including functions.
+  if (is_local_scope && is_definition) {
     bench_count("phase3_fast_local_def")
     return(build_local_symbol_id(name, relative_path, scope_id = enclosing_name))
   }

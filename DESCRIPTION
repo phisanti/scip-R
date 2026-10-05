@@ -1,6 +1,6 @@
 Package: scipR
 Title: SCIP Indexer for R Workspaces
-Version: 0.9.54
+Version: 0.9.57
 Authors@R: 
     person(given = "Santiago",
            family = "Cano-Muniz",
@@ -55,4 +55,3 @@ Collate:
     'orchestration.R'
     'symbols_mirai.R'
     'serializer_mirai.R'
-    'zzz.R'

@@ -385,35 +385,51 @@ test_that("generates correct SCIP descriptors for S3 symbols", {
 # Level 6: Performance Benchmark
 # ============================================================================
 
-test_that("S3 extraction has acceptable performance", {
-  skip_on_cran()  # Performance tests can be slow on CRAN
-  
-  # Generate a large file with 100 S3 methods
-  methods <- paste0(
-    "print.class", 1:100, " <- function(x) { cat('class", 1:100, "') }"
-  )
-  
-  tmp_dir <- tempfile("scip_s3_perf_")
-  dir.create(tmp_dir)
-  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
-  
-  file_path <- file.path(tmp_dir, "large.R")
-  writeLines(methods, file_path)
-  
-  file_info <- list(path = file_path, relative_path = "large.R")
-  
-  timing <- system.time({
-    ast <- parse_file(file_info)
-    s3_symbols <- extract_s3_symbols(ast)
+# BUG FIX (Architext-c80yp): a fixed 100 ms wall-time assertion rejected the
+# unchanged extractor under load and charged parsing to extraction. Preserve
+# method identities at three sizes, then use the shared paired CPU sampler.
+# S3 currently scans parse rows per method, so allow its existing method*row
+# growth with a 1.5x noise margin; the planted cubic-work control must fail.
+# Anti-regression tests: test/testthat/test-symbols-s3.R
+#   - S3 extraction performance retains 50 methods
+#   - S3 extraction performance retains 100 methods
+#   - S3 extraction performance retains 200 methods
+for (method_count in c(50L, 100L, 200L)) {
+  local({
+    count <- method_count
+    test_that(sprintf("S3 extraction performance retains %d methods", count), {
+      tmp_dir <- tempfile("scip_s3_perf_")
+      dir.create(tmp_dir)
+      on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+      make_file <- function(n) {
+        path <- file.path(tmp_dir, sprintf("methods-%d.R", n))
+        writeLines(sprintf(
+          "print.class%d <- function(x) { cat('class%d') }", seq_len(n), seq_len(n)
+        ), path)
+        list(path = path, relative_path = basename(path))
+      }
+      parse_timing <- system.time(ast <- parse_file(make_file(count)))
+      symbols <- extract_s3_symbols(ast)
+      methods <- Filter(function(x) x$type == "s3_method", symbols)
+      expect_equal(length(methods), count)
+      expect_equal(
+        vapply(methods, function(x) x$method_name, character(1)),
+        sprintf("print.class%d", seq_len(count))
+      )
+      skip_on_cran()  # Only repeated timing is optional; correctness always runs.
+      baseline_ast <- if (count == 50L) ast else parse_file(make_file(50L))
+      timing <- scipr_extraction_cpu_growth(extract_s3_symbols, ast, baseline_ast)
+      allowed_growth <- 1.5 * count / 50L *
+        nrow(ast$parse_data) / nrow(baseline_ast$parse_data)
+      expect_lte(timing$growth, allowed_growth)
+      cat(sprintf(
+        "\nS3 benchmark: methods=%d parse_elapsed=%.3fs extract_cpu=%.3fs baseline_cpu=%.3fs growth=%.2f bound=%.2f batch=%d\n",
+        count, parse_timing[["elapsed"]], timing$sample_cpu, timing$baseline_cpu,
+        timing$growth, allowed_growth, timing$batch
+      ))
+    })
   })
-  
-  # Should process 100 methods in < 100ms
-  expect_lt(timing["elapsed"], 0.1)
-  
-  # Verify correct count (all are methods)
-  methods_found <- Filter(function(x) x$type == "s3_method", s3_symbols)
-  expect_equal(length(methods_found), 100)
-})
+}
 
 # ============================================================================
 # Level 7: Complex Real-World Example

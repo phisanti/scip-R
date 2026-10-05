@@ -15,6 +15,8 @@
 #'   (pre-computed by build_tree_index() for O(1) lookup)
 #' @param enclosing_function IntegerVector of enclosing function node IDs for each row
 #'   (pre-computed by build_scope_index() for scope encoding in local symbol IDs)
+#' @param lexical_symbols CharacterVector of nearest lexical binding IDs per row
+#'   (empty entries retain package/base lookup; qualified calls take precedence)
 #' @param definitions_env R environment from symbol_table$definitions_env mapping
 #'   symbol name -> list(symbol_id=..., file=..., kind=..., ...)
 #' @param base_r_funcs CharacterVector of base R function names (from BASE_R_FUNCTIONS)
@@ -43,8 +45,8 @@
 #' \code{\link{resolve_symbols}} for the R implementation and fallback
 #'
 #' @keywords internal
-resolve_symbols_cpp <- function(parse_data, tree_index_ptr, inside_function, enclosing_function, definitions_env, base_r_funcs, relative_path, package_name, r_version) {
-  .Call(`_scipR_resolve_symbols_cpp`, parse_data, tree_index_ptr, inside_function, enclosing_function, definitions_env, base_r_funcs, relative_path, package_name, r_version)
+resolve_symbols_cpp <- function(parse_data, tree_index_ptr, inside_function, enclosing_function, lexical_symbols, definitions_env, base_r_funcs, relative_path, package_name, r_version) {
+  .Call(`_scipR_resolve_symbols_cpp`, parse_data, tree_index_ptr, inside_function, enclosing_function, lexical_symbols, definitions_env, base_r_funcs, relative_path, package_name, r_version)
 }
 
 #' Build a tree index from parse data (C++ implementation)

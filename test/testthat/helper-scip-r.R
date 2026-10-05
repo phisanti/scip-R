@@ -69,3 +69,67 @@ scipr_symbol_kind <- function(kind) {
   kind_enum <- RProtoBuf::P("scip.SymbolInformation.Kind")
   as.integer(kind_enum[[kind]])
 }
+
+# Exercise the actual native backend, never a silent R fallback.
+with_resolver_backend <- function(backend, code) {
+  testthat::expect_true(requireNamespace("scipR", quietly = TRUE))
+  env <- environment(resolve_symbols)
+  original_available <- get("rcpp_available", envir = env)
+  native_names <- ls(env, pattern = "_cpp$")
+  original_native <- mget(native_names, envir = env)
+  # Sourced Rcpp wrappers lack their namespace's registered native addresses.
+  # Use the installed wrappers for native calls, retaining source R orchestration.
+  for (name in native_names) {
+    assign(name, get(name, envir = asNamespace("scipR")), envir = env)
+  }
+  original_resolve <- get("resolve_symbols_cpp", envir = env)
+  state <- new.env(parent = emptyenv())
+  state$cpp_success <- 0L
+  assign("rcpp_available", function() identical(backend, "cpp"), envir = env)
+  assign("resolve_symbols_cpp", function(...) {
+    value <- original_resolve(...)
+    state$cpp_success <- state$cpp_success + 1L
+    value
+  }, envir = env)
+  on.exit({
+    assign("rcpp_available", original_available, envir = env)
+    for (name in native_names) assign(name, original_native[[name]], envir = env)
+  }, add = TRUE)
+  code()
+  if (identical(backend, "cpp")) {
+    testthat::expect_gt(state$cpp_success, 0L)
+  } else {
+    testthat::expect_equal(state$cpp_success, 0L)
+  }
+}
+
+# Measure extraction after parsing, using paired CPU samples so scheduler
+# pauses do not become extraction regressions. The caller owns its growth bound.
+scipr_extraction_cpu_growth <- function(extract, input, baseline) {
+  invisible(extract(baseline))
+  invisible(extract(input))
+  measure <- function(ast, batch) {
+    timing <- system.time(for (i in seq_len(batch)) invisible(extract(ast)))
+    unname(timing[["user.self"]] + timing[["sys.self"]])
+  }
+  # Resolve the CPU timer even if the extractor becomes substantially faster.
+  batch <- 1L
+  while (measure(baseline, batch) < 0.05 && batch < 1024L) batch <- batch * 2L
+  baseline_cpu <- sample_cpu <- numeric(5L)
+  for (i in seq_len(5L)) {
+    if (i %% 2L == 1L) {
+      baseline_cpu[i] <- measure(baseline, batch)
+      sample_cpu[i] <- measure(input, batch)
+    } else {
+      sample_cpu[i] <- measure(input, batch)
+      baseline_cpu[i] <- measure(baseline, batch)
+    }
+  }
+  testthat::expect_true(all(baseline_cpu > 0), info = "CPU timer must resolve the calibrated batch")
+  list(
+    growth = stats::median(sample_cpu / baseline_cpu),
+    sample_cpu = stats::median(sample_cpu) / batch,
+    baseline_cpu = stats::median(baseline_cpu) / batch,
+    batch = batch
+  )
+}

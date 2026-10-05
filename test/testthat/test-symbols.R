@@ -23,6 +23,34 @@ testthat::test_that("resolve_symbols marks assignment definitions", {
   testthat::expect_true(length(symbols$symbols) >= 1)
 })
 
+# REGRESSION GUARD: commented-out Shiny module calls must never become SCIP
+# reference occurrences. Dead-code liveness relies on this indexer invariant.
+testthat::test_that("resolve_symbols ignores commented-out module calls", {
+  tmp_dir <- tempfile("scip_r_commented_module_")
+  dir.create(tmp_dir)
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+  file_path <- file.path(tmp_dir, "commented_module.R")
+  writeLines(c(
+    "orphaned_module <- function(id) { id }",
+    "# orphaned_module(\"old-call\")",
+    "## moduleServer(\"orphaned\", function(input, output, session) {})"
+  ), file_path)
+
+  ast <- parse_file(list(path = file_path, relative_path = "commented_module.R"))
+  workspace <- list(metadata = list(namespace = NULL))
+  result <- resolve_symbols(ast, workspace)
+
+  orphaned_occurrences <- Filter(function(occ) {
+    grepl("#orphaned_module$", occ$symbol)
+  }, result$occurrences)
+  reference_count <- sum(vapply(orphaned_occurrences, function(occ) {
+    identical(occ$role, "reference")
+  }, logical(1)))
+
+  testthat::expect_equal(reference_count, 0)
+})
+
 # ============================================================================
 # Tests for THREE KEY FIXES
 # ============================================================================

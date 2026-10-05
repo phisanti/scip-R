@@ -181,6 +181,111 @@ build_symbol_table <- function(parsed_files, workspace) {
   )
 }
 
+#' Resolve lexical bindings before package and base-R lookups.
+#' @param data Parse-data frame.
+#' @param index Cached tree index.
+#' @param relative_path File identity for local symbols.
+#' @return Character vector aligned with parse-data rows; empty means unbound.
+#' @keywords internal
+# BUG FIX (Architext-2t0js): package lookup captured same-named local functions.
+# Definitions and references must use the nearest binding, including through
+# anonymous closures. Function-node keys separate sibling scopes; the full
+# enclosing path separates repeated nested function names in their SCIP IDs.
+# Anti-regression tests: test/testthat/test-symbols-lexical-binding.R
+#   - local function bindings shadow package and base names in both backends
+#   - same named nested scopes keep distinct function bindings and captured calls
+#   - lexical calls do not capture cross file package callers or unshadowed closures
+build_lexical_symbol_map <- function(data, index, relative_path) {
+  result <- rep("", nrow(data))
+  function_rows <- which(data$token %in% c("FUNCTION", "OP-LAMBDA"))
+  if (!length(function_rows)) return(result)
+  parents <- new.env(hash = TRUE, parent = emptyenv())
+  function_names <- new.env(hash = TRUE, parent = emptyenv())
+  bindings <- new.env(hash = TRUE, parent = emptyenv())
+  scopes <- new.env(hash = TRUE, parent = emptyenv())
+
+  # The function expression's parent is outside its own scope, unlike its body.
+  for (row in function_rows) {
+    expr <- get_parent_id_indexed(data$id[row], index)
+    parent_expr <- get_parent_id_indexed(expr, index)
+    parents[[as.character(data$id[row])]] <- get_enclosing_function_indexed(parent_expr, index)
+  }
+
+  # Assignment identity comes from the AST target, not other tokens on its line.
+  assignments <- list()
+  for (row in which(data$token %in% c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN"))) {
+    if (data$text[row] %in% c("<<-", "->>")) next
+    children <- get_children_indexed(data$parent[row], index)
+    child_rows <- vapply(children, get_row_indexed, integer(1), index = index)
+    child_rows <- child_rows[order(data$line1[child_rows], data$col1[child_rows])]
+    operator <- match(row, child_rows)
+    rightward <- data$token[row] == "RIGHT_ASSIGN"
+    target_position <- operator + if (rightward) 1L else -1L
+    value_position <- operator + if (rightward) -1L else 1L
+    if (is.na(operator) || target_position < 1L || value_position < 1L ||
+        max(target_position, value_position) > length(child_rows)) next
+    target <- get_children_indexed(data$id[child_rows[target_position]], index)
+    if (length(target) != 1L) next # Not a bare binding (e.g. object$field).
+    target_row <- get_row_indexed(target, index)
+    if (data$token[target_row] != "SYMBOL") next
+    value <- get_children_indexed(data$id[child_rows[value_position]], index)
+    value_rows <- vapply(value, get_row_indexed, integer(1), index = index)
+    functions <- value_rows[data$token[value_rows] %in% c("FUNCTION", "OP-LAMBDA")]
+    is_function <- length(functions) == 1L
+    if (is_function) function_names[[as.character(data$id[functions])]] <- data$text[target_row]
+    assignments[[length(assignments) + 1L]] <- list(row = target_row, function_binding = is_function)
+  }
+
+  scope_name <- function(scope) {
+    key <- as.character(scope)
+    cached <- scopes[[key]]
+    if (!is.null(cached)) return(cached)
+    name <- function_names[[key]]
+    if (is.null(name)) {
+      row <- get_row_indexed(scope, index)
+      name <- paste0("@", data$line1[row], ":", data$col1[row])
+    }
+    parent <- parents[[key]]
+    path <- if (is.na(parent)) name else paste0(scope_name(parent), "/", name)
+    scopes[[key]] <- path
+    path
+  }
+  register <- function(row, function_binding = FALSE) {
+    scope <- index$enclosing_function[row]
+    if (is.na(scope)) return(invisible(NULL))
+    key <- as.character(scope)
+    if (is.null(bindings[[key]])) bindings[[key]] <- new.env(hash = TRUE, parent = emptyenv())
+    # Preserve existing variable/parameter IDs; function IDs need the full scope
+    # to distinguish same-named nested functions in different enclosing closures.
+    name <- if (function_binding) scope_name(scope) else function_names[[key]]
+    bindings[[key]][[data$text[row]]] <- build_local_symbol_id(data$text[row], relative_path, name)
+  }
+  for (assignment in assignments) register(assignment$row, assignment$function_binding)
+  for (row in which(data$token == "SYMBOL_FORMALS")) register(row)
+  for (row in which(data$token == "SYMBOL")) {
+    parent <- get_row_indexed(data$parent[row], index)
+    if (!is.na(parent) && data$token[parent] == "forcond") register(row)
+  }
+
+  for (row in which(data$token %in% c("SYMBOL", "SYMBOL_FUNCTION_CALL", "SYMBOL_FORMALS"))) {
+    siblings <- get_children_indexed(data$parent[row], index)
+    sibling_rows <- vapply(siblings, get_row_indexed, integer(1), index = index)
+    if (any(data$token[sibling_rows] %in% c("NS_GET", "NS_GET_INT", "'$'", "'@'"))) next
+    scope <- index$enclosing_function[row]
+    while (!is.na(scope)) {
+      key <- as.character(scope)
+      local <- bindings[[key]]
+      symbol <- if (!is.null(local)) local[[data$text[row]]] else NULL
+      if (!is.null(symbol)) {
+        result[row] <- symbol
+        break
+      }
+      scope <- parents[[key]]
+    }
+  }
+  result
+}
+
 #' Build a global SCIP symbol ID for a package-level definition.
 #'
 #' Creates symbol IDs that are consistent across files, following the format

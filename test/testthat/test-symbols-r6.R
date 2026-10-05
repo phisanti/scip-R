@@ -623,35 +623,61 @@ test_that("R6 symbols and occurrences integrate into resolve_symbols", {
 # Level 6: Performance Benchmark
 # ============================================================================
 
-test_that("R6 extraction has acceptable performance", {
-  skip_on_cran()  # Performance tests can be slow on CRAN
-  
-  # Generate 50 R6 classes
-  classes <- sapply(1:50, function(i) {
-    sprintf(
-      "Class%d <- R6Class('Class%d',\n  public = list(\n    value = %d,\n    method = function() self$value * 2\n  )\n)",
-      i, i, i
-    )
+# BUG FIX (Architext-ex0xa): a fixed wall-time bound rejected the unchanged
+# extractor on slower machines, and included parsing in the extraction cost.
+# Keep semantic assertions on CRAN too; compare warmed, paired CPU samples only
+# after parsing. A 1.5x allowance over proportional growth admits timing noise
+# but rejects the seeded quadratic extraction (100/200 vs 50 classes).
+# Anti-regression tests: test/testthat/test-symbols-r6.R
+#   - R6 extraction performance retains 50 classes
+#   - R6 extraction performance retains 100 classes
+#   - R6 extraction performance retains 200 classes
+for (class_count in c(50L, 100L, 200L)) {
+  local({
+    count <- class_count
+    test_that(sprintf("R6 extraction performance retains %d classes", count), {
+      tmp_dir <- tempfile("scip_r6_perf_")
+      dir.create(tmp_dir)
+      on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+      make_file <- function(n) {
+        classes <- vapply(seq_len(n), function(i) {
+          sprintf(
+            paste0(
+              "Class%d <- R6Class('Class%d',\n  public = list(\n",
+              "    value = %d,\n    method = function() self$value * 2\n  )\n)"
+            ),
+            i, i, i
+          )
+        }, character(1))
+        path <- file.path(tmp_dir, sprintf("classes-%d.R", n))
+        writeLines(paste(classes, collapse = "\n\n"), path)
+        list(path = path, relative_path = basename(path))
+      }
+
+      file_info <- make_file(count)
+      parse_timing <- system.time(ast <- parse_file(file_info))
+      r6_symbols <- extract_r6_symbols(ast)
+      # The original 50-class semantic contract is unconditional. Larger
+      # fixtures also prevent a fast but incomplete extraction from passing.
+      expect_equal(length(r6_symbols), count)
+      expect_equal(
+        vapply(r6_symbols, function(x) x$class_name, character(1)),
+        sprintf("Class%d", seq_len(count))
+      )
+      skip_on_cran()  # Only the repeated CPU measurement is optional on CRAN.
+
+      baseline_ast <- if (count == 50L) ast else parse_file(make_file(50L))
+      timing <- scipr_extraction_cpu_growth(extract_r6_symbols, ast, baseline_ast)
+      expect_lte(timing$growth, 1.5 * count / 50L)
+      cat(sprintf(
+        "\nR6 benchmark: classes=%d parse_elapsed=%.3fs extract_cpu=%.3fs baseline_cpu=%.3fs growth=%.2f batch=%d\n",
+        count, parse_timing[["elapsed"]], timing$sample_cpu,
+        timing$baseline_cpu, timing$growth, timing$batch
+      ))
+    })
   })
-  
-  tmp_dir <- tempfile("scip_r6_perf_")
-  dir.create(tmp_dir)
-  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
-  
-  file_path <- file.path(tmp_dir, "large.R")
-  writeLines(paste(classes, collapse = "\n\n"), file_path)
-  
-  file_info <- list(path = file_path, relative_path = "large.R")
-  
-  timing <- system.time({
-    ast <- parse_file(file_info)
-    r6_symbols <- extract_r6_symbols(ast)
-  })
-  
-  # Should process 50 classes in < 100ms
-  expect_lt(timing["elapsed"], 0.1)
-  expect_equal(length(r6_symbols), 50)
-})
+}
 
 # ============================================================================
 # Level 7: Complex Real-World Example

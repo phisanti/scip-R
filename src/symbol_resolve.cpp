@@ -175,7 +175,8 @@ std::string resolve_symbol(
     const std::string& package_name,
     const std::string& r_version,
     const std::string& enclosing_name,
-    const std::string& qualified_pkg
+    const std::string& qualified_pkg,
+    const std::string& lexical_id
 ) {
   // Explicit pkg::func() — highest priority, emit external symbol ID directly.
   // Check definitions_env first — if qualified pkg matches our own package,
@@ -193,9 +194,16 @@ std::string resolve_symbol(
     return build_global_symbol_id(name, qualified_pkg, "0.0.0", kind);
   }
 
-  // Local definitions (inside functions) that aren't function definitions
-  // should always get local symbol IDs
-  if (is_local_scope && is_definition && kind != "function") {
+  // BUG FIX (Architext-2t0js): use the shared lexical plan before package/base
+  // lookup, after explicit namespace qualification. Do not collapse a local
+  // function definition or its captured calls into a package definition.
+  // Anti-regression tests: test/testthat/test-symbols-lexical-binding.R
+  //   - local function bindings shadow package and base names in both backends
+  //   - same named nested scopes keep distinct function bindings and captured calls
+  //   - lexical calls do not capture cross file package callers or unshadowed closures
+  if (!lexical_id.empty()) return lexical_id;
+
+  if (is_local_scope && is_definition) {
     return build_local_symbol_id(name, relative_path, enclosing_name);
   }
 
@@ -251,6 +259,8 @@ std::string resolve_symbol(
 //'   (pre-computed by build_tree_index() for O(1) lookup)
 //' @param enclosing_function IntegerVector of enclosing function node IDs for each row
 //'   (pre-computed by build_scope_index() for scope encoding in local symbol IDs)
+//' @param lexical_symbols CharacterVector of nearest lexical binding IDs per row
+//'   (empty entries retain package/base lookup; qualified calls take precedence)
 //' @param definitions_env R environment from symbol_table$definitions_env mapping
 //'   symbol name -> list(symbol_id=..., file=..., kind=..., ...)
 //' @param base_r_funcs CharacterVector of base R function names (from BASE_R_FUNCTIONS)
@@ -285,6 +295,7 @@ List resolve_symbols_cpp(
     SEXP tree_index_ptr,
     LogicalVector inside_function,
     IntegerVector enclosing_function,
+    CharacterVector lexical_symbols,
     Environment definitions_env,
     CharacterVector base_r_funcs,
     std::string relative_path,
@@ -533,7 +544,7 @@ List resolve_symbols_cpp(
       (tok == "SYMBOL_FUNCTION_CALL"),
       relative_path, definitions_env, base_r_set,
       local_registry, package_name, r_version,
-      enclosing_name, qualified_pkg
+      enclosing_name, qualified_pkg, as<std::string>(lexical_symbols[row_idx])
     );
 
     // --- Deduplicate definitions ---

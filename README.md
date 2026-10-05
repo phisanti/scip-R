@@ -8,6 +8,11 @@ The indexer detects R package metadata, discovers source files, parses R code,
 resolves definitions and references, and serializes the result as protobuf using
 the bundled `scip.proto` schema.
 
+Since 0.9.57, nested function definitions and recursive or captured calls use
+their nearest lexical binding. Package and base functions are shadowed locally;
+explicit `pkg::name` calls still resolve to that package. Existing R indexes must
+be refreshed with their original include scope to replace older merged identities.
+
 ## Installation
 
 Install `Rapp` first, then install this package from the repository root:
@@ -15,13 +20,32 @@ Install `Rapp` first, then install this package from the repository root:
 ```r
 remotes::install_github("r-lib/Rapp")
 remotes::install_local(".")
+scipR::install_scip_cli()
 ```
 
-If the CLI wrapper is not on your `PATH` after installation, install it
-explicitly:
+Launcher installation is explicit: loading `scipR` leaves installed launchers
+unchanged, including when loading a check or temporary library. Reinstall the
+wrapper after moving the package to another library:
 
 ```r
 scipR::install_scip_cli()
+```
+
+## Current-source example
+
+From this checkout, generate an index with the current source modules:
+
+```bash
+Rscript example/generate_scip_index.R /tmp/scip-r-example.scip
+```
+
+The example indexes `R/**/*.R`. An optional second argument selects another
+project while retaining that scope. Output paths are relative to the caller's
+working directory. Sourced use accepts the same arguments:
+
+```r
+source("example/generate_scip_index.R")
+generate_self_index("/tmp/example.scip", project_root = "/path/to/project")
 ```
 
 ## CLI Usage

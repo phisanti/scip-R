@@ -96,7 +96,7 @@ testthat::test_that("S3 generic symbols include roxygen documentation", {
   ), tmp)
 
   ast <- parse_file(list(path = tmp, relative_path = "s3_generic.R"))
-  symbols <- build_s3_symbol_entries(ast, "s3_generic.R", NULL)
+  symbols <- build_s3_annotations(ast)
 
   generic <- Filter(function(s) s$kind == "s3_generic", symbols)
   expect_gte(length(generic), 1)
@@ -117,7 +117,7 @@ testthat::test_that("S3 method symbols include roxygen documentation", {
   ), tmp)
 
   ast <- parse_file(list(path = tmp, relative_path = "s3_method.R"))
-  symbols <- build_s3_symbol_entries(ast, "s3_method.R", NULL)
+  symbols <- build_s3_annotations(ast)
 
   method <- Filter(function(s) s$kind == "s3_method", symbols)
   expect_gte(length(method), 1)
@@ -251,7 +251,7 @@ testthat::test_that("undocumented OOP symbols have NULL documentation, not error
 
   ast <- parse_file(list(path = tmp, relative_path = "no_docs.R"))
 
-  s3 <- build_s3_symbol_entries(ast, "no_docs.R", NULL)
+  s3 <- build_s3_annotations(ast)
   s4 <- build_s4_symbol_entries(ast, "no_docs.R", NULL)
   r6 <- build_r6_symbol_entries(ast, "no_docs.R", NULL)$symbols
 
