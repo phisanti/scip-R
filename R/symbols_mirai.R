@@ -2,7 +2,8 @@
 # Resolves documents in parallel while reusing the shared symbol table and
 # downstream document builders.
 # Inventory: `resolve_documents_mirai()`, `wait_for_daemons()`,
-# `mirai_online_daemons()`, `collect_with_watchdog()`.
+# `mirai_online_daemons()`, `online_daemons_from_status()`,
+# `collect_with_watchdog()`, `chunk_files()`, `unchunk_results()`.
 
 #' @include benchmark.R
 #' @include parser.R
@@ -114,37 +115,52 @@ resolve_documents_mirai <- function(files, workspace, daemons = parallel::detect
   symbol_table_for_dispatch <- symbol_table
   symbol_table_for_dispatch$tree_indices <- NULL
 
-  t_dispatch <- bench_start("mirai_task_dispatch", list(task_count = length(parsed_files)))
-  tasks <- lapply(seq_along(parsed_files), function(i) {
-    ast <- parsed_files[[i]]
-    file_info <- file_infos[[i]]
-
+  # BUG FIX (Architext-1nhe8): one task per file serialized symbol_table and
+  # workspace once per file: 595 copies on a 595-file shard, 44s of dispatch.
+  # Every task serializes its arguments, and those two are the bulk of them,
+  # so a task now carries a chunk of files. Files are dealt round-robin so
+  # the large files of one directory spread across chunks; unchunk_results()
+  # puts the results back in file order.
+  # Anti-regression tests: test/testthat/test-symbols-mirai.R
+  #   - chunk_files covers every file once in a bounded number of chunks
+  #   - unchunk_results restores file order
+  #   - parallel resolution matches sequential documents
+  chunks <- chunk_files(length(parsed_files), daemons)
+  t_dispatch <- bench_start(
+    "mirai_task_dispatch",
+    list(task_count = length(chunks), file_count = length(parsed_files))
+  )
+  tasks <- lapply(chunks, function(idx) {
     mirai::mirai(
       {
         library(scipR)
         ns <- asNamespace("scipR")
-        # Rebuild tree_index locally so cpp_index references daemon-side memory
-        tree_index <- get("build_tree_index", envir = ns)(ast$parse_data)
-        analysis <- get("resolve_symbols", envir = ns)(
-          ast,
-          workspace,
-          track_externals = TRUE,
-          symbol_table = symbol_table,
-          tree_index = tree_index
-        )
-        occurrences <- get("map_occurrences", envir = ns)(
-          analysis, ast, tree_index = tree_index
-        )
-        document <- get("build_document", envir = ns)(
-          file_info, occurrences, analysis
-        )
-        diagnostics <- get("collect_diagnostics", envir = ns)(
-          file_info, ast, analysis
-        )
-        list(document = document, diagnostics = diagnostics, external_refs = analysis$external_refs)
+        lapply(seq_along(asts), function(k) {
+          ast <- asts[[k]]
+          file_info <- file_infos[[k]]
+          # Rebuild tree_index locally so cpp_index references daemon-side memory
+          tree_index <- get("build_tree_index", envir = ns)(ast$parse_data)
+          analysis <- get("resolve_symbols", envir = ns)(
+            ast,
+            workspace,
+            track_externals = TRUE,
+            symbol_table = symbol_table,
+            tree_index = tree_index
+          )
+          occurrences <- get("map_occurrences", envir = ns)(
+            analysis, ast, tree_index = tree_index
+          )
+          document <- get("build_document", envir = ns)(
+            file_info, occurrences, analysis
+          )
+          diagnostics <- get("collect_diagnostics", envir = ns)(
+            file_info, ast, analysis
+          )
+          list(document = document, diagnostics = diagnostics, external_refs = analysis$external_refs)
+        })
       },
-      ast = ast,
-      file_info = file_info,
+      asts = parsed_files[idx],
+      file_infos = file_infos[idx],
       workspace = workspace,
       symbol_table = symbol_table_for_dispatch
     )
@@ -169,7 +185,7 @@ resolve_documents_mirai <- function(files, workspace, daemons = parallel::detect
   }
 
   bench_end(t_phase3)
-  results
+  unchunk_results(results, chunks)
 }
 
 # Poll mirai::status() until at least one daemon is online or the timeout
@@ -192,8 +208,25 @@ wait_for_daemons <- function(expected, timeout_secs = 30) {
 # Return the number of daemons currently online, robust to mirai status()
 # returning either a matrix (dispatcher mode) or a list across versions.
 mirai_online_daemons <- function() {
-  st <- tryCatch(mirai::status(), error = function(e) NULL)
-  if (is.null(st) || is.null(st$daemons)) {
+  online_daemons_from_status(tryCatch(mirai::status(), error = function(e) NULL))
+}
+
+# The online-daemon count in one mirai::status() value; 0 when there is none.
+online_daemons_from_status <- function(st) {
+  if (is.null(st)) {
+    return(0L)
+  }
+  # BUG FIX (Architext-1nhe8): mirai >= 2.0 reports live daemons as
+  # `connections`; `daemons` is then the dispatcher URL, a string the branch
+  # below read as "1 online" whatever the count, so wait_for_daemons() ran to
+  # its 30s timeout on every parallel run.
+  # Anti-regression tests: test/testthat/test-symbols-mirai.R
+  #   - online_daemons_from_status reads connections from a dispatcher status
+  #   - online_daemons_from_status keeps the legacy status shapes
+  if (is.numeric(st$connections)) {
+    return(as.integer(st$connections))
+  }
+  if (is.null(st$daemons)) {
     return(0L)
   }
   d <- st$daemons
@@ -253,4 +286,26 @@ collect_with_watchdog <- function(tasks, expected_daemons, stall_timeout_secs = 
   }
 
   lapply(tasks, function(task) task$data)
+}
+
+# Split `n` files into at most `daemons * 4` chunks, dealt round-robin. Four
+# chunks per daemon keep every worker busy when chunk costs differ while
+# serializing the shared arguments a handful of times per daemon, not once
+# per file. Returns a list of integer index vectors covering 1..n once each.
+chunk_files <- function(n, daemons) {
+  if (n == 0L) {
+    return(list())
+  }
+  k <- min(n, max(1L, as.integer(daemons)) * 4L)
+  unname(split(seq_len(n), (seq_len(n) - 1L) %% k))
+}
+
+# Flatten per-chunk result lists back into file order: element j of chunk i
+# is the result for file chunks[[i]][j].
+unchunk_results <- function(results, chunks) {
+  out <- vector("list", sum(lengths(chunks)))
+  for (i in seq_along(chunks)) {
+    out[chunks[[i]]] <- results[[i]]
+  }
+  out
 }
