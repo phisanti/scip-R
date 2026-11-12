@@ -13,6 +13,9 @@
 #' @include diagnostics.R
 NULL
 
+# `asts` is bound by mirai::mirai() in the daemon, not in this namespace.
+utils::globalVariables("asts")
+
 #' Resolve documents in parallel using mirai daemons.
 #'
 #' Uses a three-phase approach for cross-file reference resolution:
@@ -115,13 +118,13 @@ resolve_documents_mirai <- function(files, workspace, daemons = parallel::detect
   symbol_table_for_dispatch <- symbol_table
   symbol_table_for_dispatch$tree_indices <- NULL
 
-  # BUG FIX (Architext-1nhe8): one task per file serialized symbol_table and
+  # BUG FIX: one task per file serialized symbol_table and
   # workspace once per file: 595 copies on a 595-file shard, 44s of dispatch.
   # Every task serializes its arguments, and those two are the bulk of them,
   # so a task now carries a chunk of files. Files are dealt round-robin so
   # the large files of one directory spread across chunks; unchunk_results()
   # puts the results back in file order.
-  # Anti-regression tests: test/testthat/test-symbols-mirai.R
+  # Anti-regression tests: tests/testthat/test-symbols-mirai.R
   #   - chunk_files covers every file once in a bounded number of chunks
   #   - unchunk_results restores file order
   #   - parallel resolution matches sequential documents
@@ -216,11 +219,11 @@ online_daemons_from_status <- function(st) {
   if (is.null(st)) {
     return(0L)
   }
-  # BUG FIX (Architext-1nhe8): mirai >= 2.0 reports live daemons as
+  # BUG FIX: mirai >= 2.0 reports live daemons as
   # `connections`; `daemons` is then the dispatcher URL, a string the branch
   # below read as "1 online" whatever the count, so wait_for_daemons() ran to
   # its 30s timeout on every parallel run.
-  # Anti-regression tests: test/testthat/test-symbols-mirai.R
+  # Anti-regression tests: tests/testthat/test-symbols-mirai.R
   #   - online_daemons_from_status reads connections from a dispatcher status
   #   - online_daemons_from_status keeps the legacy status shapes
   if (is.numeric(st$connections)) {

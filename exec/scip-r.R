@@ -41,10 +41,13 @@ cache <- FALSE
 #| description: Number of parallel workers (0 for sequential processing)
 parallel <- 0L
 
-#| description: Optional namespace prefix for emitted symbols
-namespace <- ""
+# BUG FIX: --namespace was accepted and ignored, so the index came out
+# byte-identical with or without it. The flag is removed; Rapp now rejects it.
+# Anti-regression tests: tests/testthat/test-orchestration.R
+#   - scip-r CLI rejects the removed --namespace flag
+#   - index_project no longer forwards a namespace to the workspace
 
-#| description: Override project name in SCIP metadata
+#| description: Project name in symbol IDs (defaults to the root directory name)
 project_name <- ""
 
 #| description: Print scip-r version and exit
@@ -68,7 +71,6 @@ output <- normalizePath(output, winslash = "/", mustWork = FALSE)
 parallel <- scipR::validate_args(parallel)
 
 # Convert empty strings to NULL for optional parameters
-namespace <- if (nzchar(namespace)) namespace else NULL
 project_name <- if (nzchar(project_name)) project_name else NULL
 
 # Process include patterns (empty vector → NULL means "include all")
@@ -86,7 +88,6 @@ cfg <- list(
   include = include,
   cache = isTRUE(cache),
   parallel = parallel,
-  namespace = namespace,
   `project-name` = project_name
 )
 

@@ -1,0 +1,292 @@
+---
+title: "Indexing an R project with scipR"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Indexing an R project with scipR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+scipR writes a [SCIP](https://github.com/scip-code/scip) index for an R
+project: every definition and reference in the sources, with stable symbol
+IDs, serialized as protobuf. Code search and navigation tools read that file
+to answer "where is this defined" and "who calls this" without re-parsing R.
+
+Most users run scipR as a command, `scip-r`, from a shell, a Makefile or a CI
+job. This vignette sets that command up, shows how to index the common kinds
+of R project, and then does the same from R and reads the result back.
+
+## Setting up the `scip-r` command
+
+scipR builds its command line with [Rapp](https://github.com/r-lib/Rapp).
+Rapp comes from CRAN as a dependency. Install scipR, then the launcher:
+
+```r
+install.packages("remotes")
+remotes::install_github("phisanti/scip-R")
+
+scipR::install_scip_cli()
+```
+
+`install_scip_cli()` writes a small `scip-r` script into Rapp's bin
+directory: `~/.local/bin` on macOS and Linux, and
+`%LOCALAPPDATA%\Programs\R\Rapp\bin` on Windows. Set `RAPP_BIN_DIR` before
+calling it to choose another directory, or pass one directly:
+
+```r
+scipR::install_scip_cli(destdir = "~/bin")
+```
+
+That directory must be on your `PATH`. On macOS or Linux, if the shell
+cannot find `scip-r`, add this to `~/.zshrc` or `~/.bashrc`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Check the installation:
+
+```bash
+scip-r --version
+scip-r --help
+```
+
+The launcher records the absolute paths of `Rscript` and of the installed
+package. Run `scipR::install_scip_cli()` again after upgrading R or moving
+scipR to another library. Loading or updating the package never touches an
+existing launcher.
+
+## Indexing from the command line
+
+Run `scip-r` with the project root, an output file and the files to index:
+
+```bash
+scip-r --root path/to/project --output index.scip --include "R/**/*.R"
+```
+
+`--root` defaults to the current directory and `--output` to `index.scip`,
+so inside the project this is enough:
+
+```bash
+cd path/to/project
+scip-r --include "R/**/*.R"
+```
+
+### Choosing files with `--include`
+
+`--include` takes a glob relative to the root and can be repeated. `**`
+matches any number of directories, including none, so `"R/**/*.R"` matches
+both `R/utils.R` and `R/models/fit.R`. Quote the patterns so the shell does
+not expand them.
+
+Without `--include`, scip-r indexes every R file not excluded by
+`.gitignore`, `.Rbuildignore` or its built-in list of generated directories.
+For a real project, always pass `--include`: a project using renv keeps a
+copy of every dependency's source under `renv/`, and indexing those takes
+far longer and fills the index with other packages' symbols.
+
+Patterns for common layouts:
+
+```bash
+# A package
+scip-r --include "R/**/*.R"
+
+# A package with scripts under inst/ and its tests
+scip-r --include "R/**/*.R" --include "inst/**/*.R" --include "tests/**/*.R"
+
+# A Shiny app or analysis project without a package layout
+scip-r --include "app/**/*.R" --include "modules/**/*.R" --include "scripts/**/*.R"
+
+# Lowercase .r files too
+scip-r --include "R/**/*.R" --include "R/**/*.r"
+```
+
+The first progress line says how many files matched:
+
+```
+ℹ Phase 1: Parsing 412 files...
+```
+
+If no file matches, scip-r stops with an error naming the patterns and
+writes no index; a `--root` that does not exist fails the same way. Both exit
+with a non-zero status, so a Makefile or CI job stops there.
+
+### Other options
+
+```bash
+# Resolve symbols with 4 parallel workers (worth it from about 50 files)
+scip-r --include "R/**/*.R" --parallel 4
+
+# Cache file hashes under .scip-r/ between runs
+scip-r --include "R/**/*.R" --cache
+
+# Set the project name used in symbol IDs (defaults to the root directory name)
+scip-r --include "R/**/*.R" --project-name myproject
+```
+
+If parallel workers cannot start, for example in a sandbox that blocks local
+sockets, scip-r falls back to sequential indexing and still writes the full
+index.
+
+The project name is part of every global symbol ID
+(`scip-r r myproject 0.1.0 clean_scores().`). By default it is the name of the
+root directory, so the same project cloned into a differently named folder gets
+different IDs. Set `--project-name` explicitly in CI and anywhere else the
+checkout path varies.
+
+Both `--flag value` and `--flag=value` work. Pass `--help` for the full list.
+
+### In a Makefile or CI job
+
+The index is a build artifact. Regenerate it from a committed tree and keep
+it out of version control:
+
+```make
+index.scip: $(shell find R -name '*.R')
+	scip-r --root . --output $@ --include "R/**/*.R"
+```
+
+```bash
+echo "*.scip" >> .gitignore
+```
+
+Code intelligence tools that read SCIP take the file as input, for example
+Sourcegraph's `src code-intel upload -file=index.scip`.
+
+## Indexing from R
+
+The rest of this vignette builds a small package, indexes it from R with
+`index_project()`, and reads the index back to show what it contains.
+
+### A small project
+
+The project has two files. `summarise_scores()` in `R/report.R` calls
+`clean_scores()` from `R/clean.R`, and `print.score_report()` is an S3 method.
+
+```{r project}
+root <- file.path(tempdir(), "scorepkg")
+dir.create(file.path(root, "R"), recursive = TRUE, showWarnings = FALSE)
+
+writeLines(c(
+  "Package: scorepkg",
+  "Version: 0.1.0",
+  "Title: Example Scores",
+  "Description: A tiny package to index.",
+  "License: MIT"
+), file.path(root, "DESCRIPTION"))
+
+writeLines(c(
+  "clean_scores <- function(x) {",
+  "  x[!is.na(x)]",
+  "}"
+), file.path(root, "R", "clean.R"))
+
+writeLines(c(
+  "summarise_scores <- function(x) {",
+  "  kept <- clean_scores(x)",
+  "  structure(list(mean = mean(kept), n = length(kept)), class = \"score_report\")",
+  "}",
+  "",
+  "print.score_report <- function(x, ...) {",
+  "  cat(\"mean:\", x$mean, \"over\", x$n, \"scores\\n\")",
+  "  invisible(x)",
+  "}"
+), file.path(root, "R", "report.R"))
+```
+
+### Building the index
+
+`index_project()` takes the same settings as the `scip-r` command line.
+`include` limits indexing to the given globs. Always set it for real
+projects, so dependency folders such as `renv/` are not walked.
+
+```{r index, message = FALSE}
+library(scipR)
+
+output <- file.path(tempdir(), "scorepkg.scip")
+index_project(list(
+  root = root,
+  output = output,
+  include = "R/**/*.R",
+  cache = FALSE,
+  parallel = 0L,
+  `project-name` = NULL
+))
+
+file.exists(output)
+```
+
+This is the same run as `scip-r --root scorepkg --output scorepkg.scip
+--include "R/**/*.R"`.
+
+### Reading the index
+
+The schema ships with the package, so any protobuf reader can open the
+file. With RProtoBuf:
+
+```{r read}
+proto <- system.file("scip.proto", package = "scipR")
+if (!tryCatch(is.object(RProtoBuf::P("scip.Index")), error = function(e) FALSE)) {
+  RProtoBuf::readProtoFiles(proto)
+}
+index <- RProtoBuf::read(RProtoBuf::P("scip.Index"), output)
+
+vapply(as.list(index$documents), function(doc) doc$relative_path, character(1))
+```
+
+Each document lists the symbols it defines:
+
+```{r symbols}
+report <- Filter(
+  function(doc) doc$relative_path == "R/report.R",
+  as.list(index$documents)
+)[[1]]
+
+data.frame(
+  name = vapply(as.list(report$symbols), function(s) s$display_name, character(1)),
+  symbol = vapply(as.list(report$symbols), function(s) s$symbol, character(1))
+)
+```
+
+### Following a call across files
+
+An occurrence ties a source range to a symbol. The call to `clean_scores()`
+in `R/report.R` carries the same symbol ID as its definition in `R/clean.R`;
+that shared ID is what lets a tool jump from the call to the definition.
+
+```{r occurrences}
+occurrence_table <- function(doc) {
+  occs <- as.list(doc$occurrences)
+  data.frame(
+    file = doc$relative_path,
+    line = vapply(occs, function(o) o$range[1] + 1L, numeric(1)),
+    symbol = vapply(occs, function(o) o$symbol, character(1)),
+    definition = vapply(occs, function(o) bitwAnd(o$symbol_roles, 1L) == 1L, logical(1))
+  )
+}
+
+occs <- do.call(rbind, lapply(as.list(index$documents), occurrence_table))
+calls <- occs[endsWith(occs$symbol, " clean_scores()."), ]
+rownames(calls) <- NULL
+calls
+```
+
+SCIP ranges are 0-based; the table adds 1 to show editor line numbers.
+
+## Options reference
+
+Each `index_project()` field matches a command-line flag.
+
+
+| Field | CLI flag | Meaning |
+|---|---|---|
+| `root` | `--root` | Project directory to index. |
+| `output` | `--output` | Destination `.scip` file. |
+| `include` | `--include` | Globs to index (repeatable). `NULL` indexes every non-ignored R file. |
+| `cache` | `--cache` | Store file hashes under `.scip-r/state.rds`. |
+| `parallel` | `--parallel` | Number of `mirai` workers; `0` is sequential. |
+| `project-name` | `--project-name` | Project name used in global symbol IDs and metadata; defaults to the name of the root directory. |

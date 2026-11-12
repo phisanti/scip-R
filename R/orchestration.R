@@ -29,7 +29,6 @@ NULL
 #'   \describe{
 #'     \item{root}{Project root directory (normalized absolute path)}
 #'     \item{output}{Destination .scip file path (normalized absolute path)}
-#'     \item{namespace}{Optional namespace prefix for local symbols (character or NULL)}
 #'     \item{project-name}{Optional override for project name in metadata (character or NULL)}
 #'     \item{cache}{Enable cache hints for file discovery (logical)}
 #'     \item{parallel}{Number of mirai workers for symbol resolution (integer, 0 = sequential)}
@@ -43,7 +42,6 @@ NULL
 #' cfg <- list(
 #'   root = "/path/to/project",
 #'   output = "index.scip",
-#'   namespace = NULL,
 #'   `project-name` = NULL,
 #'   cache = FALSE,
 #'   parallel = 0L
@@ -59,7 +57,7 @@ index_project <- function(cfg) {
 
   # Analyze workspace structure
   t_ws <- bench_start("analyze_workspace", list(root = cfg$root))
-  workspace <- analyze_workspace(cfg$root, cfg$namespace)
+  workspace <- analyze_workspace(cfg$root)
   bench_end(t_ws)
 
   # Override project name if specified
@@ -76,21 +74,39 @@ index_project <- function(cfg) {
   )
   bench_end(t_disc, list(file_count = length(plan$files)))
 
+  # BUG FIX: an --include that matched nothing wrote an empty index and
+  # exited 0, so a mistyped glob produced a silently useless index.
+  # Anti-regression tests: tests/testthat/test-orchestration.R
+  #   - index_project aborts when include patterns match no files
+  #   - the abort names every include pattern
+  #   - scip-r CLI aborts on an unmatched --include and writes no index
+  if (length(plan$files) == 0L) {
+    patterns <- cfg$include
+    cli::cli_abort(c(
+      "No R files to index under {.path {workspace$metadata$project_root}}.",
+      if (length(patterns)) {
+        c("x" = "No file matched {.arg --include} {.val {patterns}}.")
+      } else {
+        c("x" = "Every R file is excluded by {.file .gitignore}, {.file .Rbuildignore} or the default ignores.")
+      },
+      "i" = "Patterns are relative to the root; quote them so the shell does not expand them."
+    ))
+  }
+
   # Determine execution mode
   effective_parallel <- cfg$parallel %||% 0L
 
   # Route to appropriate backend
   #
-  # BUG FIX (Architext-0kdq): the parallel branch had no error handling, so a
+  # BUG FIX: the parallel branch had no error handling, so a
   # mirai failure killed the whole run even though the sequential path would
   # have produced the same index.
   # Root cause: mirai::daemons() needs sockets to launch workers. In sandboxed
   # or restricted worker environments the daemons never connect, and
-  # wait_for_daemons() cli_aborts after 30s. Callers cannot avoid this:
-  # semquery appends --parallel automatically at >=50 R files with no opt-out,
-  # so an aborted run drops the R SCIP shard and every downstream answer
-  # (audit, dead code, duplicates) silently comes from a stale index.
-  # Anti-regression tests: test/testthat/test-orchestration.R
+  # wait_for_daemons() cli_aborts after 30s. Tools that enable --parallel
+  # automatically on large projects then lost the whole index, and anything
+  # reading it kept answering from a stale copy.
+  # Anti-regression tests: tests/testthat/test-orchestration.R
   #   - "index_project falls back to sequential when the mirai path aborts"
   #   - "the fallback warns instead of failing silently"
   #   - "the sequential fallback receives the parallel path's inputs"

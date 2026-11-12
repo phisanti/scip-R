@@ -1,6 +1,6 @@
 # parse-lookup.R — O(1) per-file id/parent lookup index over parse_data.
 # Builds `by_id` and `by_parent` row-index maps once per file; drop-in,
-# order-preserving replacements for linear data[data$col==x,] scans (EXP-A).
+# order-preserving replacements for linear data[data$col==x,] scans.
 
 #' Build a lightweight id/parent lookup index for a parse-data frame.
 #'

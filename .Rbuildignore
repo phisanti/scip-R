@@ -1,0 +1,12 @@
+^\.git$
+^\.github$
+^\.gitignore$
+^\.lintr$
+^\.DS_Store$
+^.*\.Rcheck$
+^.*\.tar\.gz$
+^.*\.scip$
+^\.scip-r$
+^analyze_bench\.sh$
+^doc$
+^Meta$

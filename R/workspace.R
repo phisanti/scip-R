@@ -11,21 +11,31 @@ NULL
 #' dependencies, and file exclusion rules from `.gitignore` and `.Rbuildignore`.
 #'
 #' @param root Character path to the project root directory.
-#' @param namespace Optional symbol namespace prefix for emitted SCIP symbols.
 #' @return A list containing:
-#'   - `metadata`: project_root, project_uri, project_name, project_version, namespace
+#'   - `metadata`: project_root, project_uri, project_name, project_version
 #'   - `dependencies`: named character vector of package -> version mappings
 #'   - `ignore`: list of ignore rules for file discovery
 #' @keywords internal
-analyze_workspace <- function(root, namespace = NULL) {
-  root <- normalizePath(root, winslash = "/", mustWork = FALSE)
+# BUG FIX: a nonexistent root indexed zero files, wrote an empty index and
+# exited 0, so a typo in --root passed silently in CI.
+# Anti-regression tests: tests/testthat/test-workspace.R
+#   - analyze_workspace aborts on a nonexistent root
+#   - analyze_workspace aborts when root is a file
+#   - scip-r CLI aborts on a nonexistent --root and writes no index
+analyze_workspace <- function(root) {
+  if (!dir.exists(root)) {
+    cli::cli_abort(c(
+      "Project root {.path {root}} is not a directory.",
+      "i" = "Pass an existing directory with {.arg --root}."
+    ))
+  }
+  root <- normalizePath(root, winslash = "/", mustWork = TRUE)
 
   metadata <- list(
     project_root = root,
     project_uri = paste0("file://", root),
     project_name = basename(root),
-    project_version = detect_project_version(root),
-    namespace = namespace
+    project_version = detect_project_version(root)
   )
 
   list(

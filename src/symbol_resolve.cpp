@@ -19,8 +19,8 @@
 //   which was the dominant bottleneck (>90% of Phase 3 execution time).
 //
 // PERFORMANCE:
-//   - Before (R): ~200s for 89-file project (playbase)
-//   - After (C++): ~97s for same project
+//   - Before (R): ~200s for an 89-file package
+//   - After (C++): ~97s for the same package
 //   - Speedup: ~2x overall (the loop itself is ~50x faster, but other R
 //     code still runs for S3/R6/S4/Shiny detection)
 //
@@ -41,8 +41,8 @@
 // MAINTENANCE NOTES:
 //   - If symbol resolution logic changes in R, update here too
 //   - The R fallback in symbols.R should remain in sync as a reference
-//   - Test any changes with: R CMD INSTALL . && run indexer on playbase
-//   - Compare output with scripts/compare_scip_indexes.R
+//   - Reinstall the package after editing this file; tests exercise both the
+//     C++ and R backends (with_resolver_backend() in the test helper)
 //
 // SEE ALSO:
 //   - R/symbols.R:resolve_symbols() - R implementation and fallback
@@ -194,10 +194,10 @@ std::string resolve_symbol(
     return build_global_symbol_id(name, qualified_pkg, "0.0.0", kind);
   }
 
-  // BUG FIX (Architext-2t0js): use the shared lexical plan before package/base
+  // BUG FIX: use the shared lexical plan before package/base
   // lookup, after explicit namespace qualification. Do not collapse a local
   // function definition or its captured calls into a package definition.
-  // Anti-regression tests: test/testthat/test-symbols-lexical-binding.R
+  // Anti-regression tests: tests/testthat/test-symbols-lexical-binding.R
   //   - local function bindings shadow package and base names in both backends
   //   - same named nested scopes keep distinct function bindings and captured calls
   //   - lexical calls do not capture cross file package callers or unshadowed closures

@@ -187,11 +187,11 @@ build_symbol_table <- function(parsed_files, workspace) {
 #' @param relative_path File identity for local symbols.
 #' @return Character vector aligned with parse-data rows; empty means unbound.
 #' @keywords internal
-# BUG FIX (Architext-2t0js): package lookup captured same-named local functions.
+# BUG FIX: package lookup captured same-named local functions.
 # Definitions and references must use the nearest binding, including through
 # anonymous closures. Function-node keys separate sibling scopes; the full
 # enclosing path separates repeated nested function names in their SCIP IDs.
-# Anti-regression tests: test/testthat/test-symbols-lexical-binding.R
+# Anti-regression tests: tests/testthat/test-symbols-lexical-binding.R
 #   - local function bindings shadow package and base names in both backends
 #   - same named nested scopes keep distinct function bindings and captured calls
 #   - lexical calls do not capture cross file package callers or unshadowed closures

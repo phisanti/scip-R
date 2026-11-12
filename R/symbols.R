@@ -392,10 +392,10 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
     }
   }
 
-  # BUG FIX (Architext-xegg): S3 metadata created duplicate, positionless IDs.
+  # BUG FIX: S3 metadata created duplicate, positionless IDs.
   # The S3 builder invented local IDs unrelated to the resolver's definitions.
   # Join by definition range, retaining package/local identity and references.
-  # Anti-regression tests: test/testthat/test-symbols-s3-identity.R
+  # Anti-regression tests: tests/testthat/test-symbols-s3-identity.R
   #   - S3 metadata reuses located package identities
   #   - S3 annotations keep same-named nested definitions separate
   #   - serialized S3 symbols have one located identity and preserved documentation
@@ -853,4 +853,3 @@ merge_external_refs <- function(refs1, refs2) {
 # Standard SCIP pattern stores references as Occurrences with SymbolRoles=8,
 # not as SymbolInformation.Relationships. Relationships are reserved for
 # IsImplementation (class inheritance) and IsTypeDefinition only.
-# See: .active_plans/align_scip-R_to_standard.md

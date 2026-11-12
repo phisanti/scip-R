@@ -251,41 +251,6 @@ extract_s3_symbols <- function(ast_module) {
   s3_symbols
 }
 
-#' Build SCIP symbol descriptor for an S3 symbol.
-#'
-#' Converts S3 generic or method into SCIP format with metadata.
-#'
-#' @param s3_info List from extract_s3_symbols with type, names, and range.
-#' @param workspace Workspace context with package metadata.
-#' @return List with SCIP symbol descriptor and metadata.
-#' @keywords internal
-s3_to_scip <- function(s3_info, workspace) {
-  package_name <- workspace$metadata$namespace %||% "local"
-  version <- workspace$metadata$version %||% "0.0.0"
-
-  if (s3_info$type == "s3_generic") {
-    # Format: scip-r <package> <version> <generic>().(s3_generic)
-    descriptor <- sprintf("%s().(s3_generic)", s3_info$generic_name)
-  } else if (s3_info$type == "s3_method") {
-    # Format: scip-r <package> <version> <method>().(s3_method)
-    descriptor <- sprintf("%s().(s3_method)", s3_info$method_name)
-  } else {
-    descriptor <- sprintf("%s().", s3_info$func_name %||% "unknown")
-  }
-
-  scip_symbol <- sprintf("scip-r %s %s %s", package_name, version, descriptor)
-
-  list(
-    symbol = scip_symbol,
-    range = s3_info$range,
-    metadata = list(
-      s3_type = s3_info$type,
-      generic_name = s3_info$generic_name,
-      class_name = s3_info$class_name %||% NA
-    )
-  )
-}
-
 #' Build located S3 annotations for the main symbol resolver.
 #'
 #' Takes the output of extract_s3_symbols() and converts it into a list of

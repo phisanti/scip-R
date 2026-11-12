@@ -1,16 +1,19 @@
 Package: scipR
 Title: SCIP Indexer for R Workspaces
-Version: 0.9.57
+Version: 0.9.58
 Authors@R: 
     person(given = "Santiago",
            family = "Cano-Muniz",
-           email = "tisalon@proton.me",
+           email = "tisalon@outlook.com",
            role = c("aut", "cre"))
-Author: Santiago Cano-Muniz [aut, cre]
-Maintainer: Santiago Cano-Muniz <tisalon@proton.me>
-Description: Generates SCIP indexes for R codebases so developer tools can serve
-    symbol-aware code search and navigation. Still under active development.
+Description: Generates SCIP (Source Code Intelligence Protocol) indexes for R
+    projects. Definitions and references are resolved across files and
+    through S3, S4, S7 and R6 classes, closures, Shiny modules and plumber
+    routes, then written as a protobuf index that code search and navigation
+    tools can read. Ships a 'scip-r' command line tool.
 License: MIT + file LICENSE
+URL: https://github.com/phisanti/scip-R
+BugReports: https://github.com/phisanti/scip-R/issues
 Encoding: UTF-8
 Depends: R (>= 3.6)
 LinkingTo: Rcpp
@@ -19,13 +22,16 @@ Imports:
     mirai,
     Rcpp,
     RProtoBuf,
-    Rapp,
+    Rapp (>= 0.2.0),
     stringi
 Suggests:
     digest,
-    testthat (>= 3.0.0)
+    knitr,
+    rmarkdown,
+    testthat (>= 3.1.7)
+VignetteBuilder: knitr
 LazyData: false
-RoxygenNote: 7.3.3.9000
+RoxygenNote: 7.3.2
 Collate:
     'RcppExports.R'
     'benchmark.R'
@@ -44,9 +50,9 @@ Collate:
     'symbols-dispatch.R'
     'symbols-plumber.R'
     'symbols-shiny.R'
+    'symbols-s7.R'
     'symbols-r6.R'
     'symbols-s4.R'
-    'symbols-s7.R'
     'symbols-s3.R'
     'symbols-qualified.R'
     'symbols.R'

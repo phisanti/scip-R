@@ -474,8 +474,8 @@ build_shiny_symbol_id <- function(name, relative_path, namespace = NULL) {
     sprintf("%s %s#%s", namespace, sanitized_path, esc_name)
   } else {
     # For local symbols delegate to the canonical helper so the path format
-    # matches the variable symbols emitted by the main resolver — this ensures
-    # semquery can locate the symbol using the file path.
+    # matches the variable symbols emitted by the main resolver, and tools can
+    # locate the symbol by file path.
     build_local_symbol_id(name, relative_path)
   }
 }

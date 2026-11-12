@@ -411,7 +411,10 @@ extract_s7_named_arg <- function(call_expr_id, arg_name, lookup) {
     return(NULL)
   }
   arg_row <- arg_rows[1, ]
-  eq_rows <- children[children$token == "EQ_SUB" & children$line1 == arg_row$line1 & children$col1 > arg_row$col1, , drop = FALSE]
+  eq_rows <- children[
+    children$token == "EQ_SUB" & children$line1 == arg_row$line1 & children$col1 > arg_row$col1, ,
+    drop = FALSE
+  ]
   if (nrow(eq_rows) == 0) {
     return(NULL)
   }
@@ -571,7 +574,10 @@ extract_s7_method_property_refs <- function(function_expr, formal_name, lookup) 
   slot_rows <- descendants[descendants$token == "SLOT", , drop = FALSE]
   for (i in seq_len(nrow(slot_rows))) {
     parent_children <- rows_by_parent_lookup(slot_rows$parent[i], lookup)
-    object_rows <- parent_children[parent_children$token == "expr" & parent_children$col1 < slot_rows$col1[i], , drop = FALSE]
+    object_rows <- parent_children[
+      parent_children$token == "expr" & parent_children$col1 < slot_rows$col1[i], ,
+      drop = FALSE
+    ]
     if (nrow(object_rows) == 0) {
       next
     }

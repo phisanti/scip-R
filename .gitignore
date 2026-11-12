@@ -1,0 +1,22 @@
+# R build and check artifacts
+*.Rcheck/
+*.tar.gz
+.Rhistory
+.RData
+.Rproj.user/
+
+# Compiled code
+src/*.o
+src/*.so
+src/*.dll
+
+# SCIP output and the --cache state
+*.scip
+.scip-r/
+
+# OS
+.DS_Store
+
+# Built vignettes
+/doc/
+/Meta/

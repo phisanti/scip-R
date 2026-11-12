@@ -263,7 +263,7 @@ build_plumber_symbol_entries <- function(ast_module, relative_path, namespace = 
 #' Build a SCIP symbol identifier for plumber endpoints.
 #'
 #' Mirrors `build_shiny_symbol_id()`: namespaced format for package-exported
-#' symbols, otherwise the canonical local-symbol format so semquery can locate
+#' symbols, otherwise the canonical local-symbol format so tools can locate
 #' the endpoint by file path.
 #'
 #' @param name Symbol name.
