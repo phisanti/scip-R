@@ -20,3 +20,6 @@ src/*.dll
 # Built vignettes
 /doc/
 /Meta/
+
+# pkgdown site, built by .github/workflows/pkgdown.yaml
+/docs/

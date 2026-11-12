@@ -12,7 +12,7 @@ Description: Generates SCIP (Source Code Intelligence Protocol) indexes for R
     routes, then written as a protobuf index that code search and navigation
     tools can read. Ships a 'scip-r' command line tool.
 License: MIT + file LICENSE
-URL: https://github.com/phisanti/scip-R
+URL: https://phisanti.github.io/scip-R/, https://github.com/phisanti/scip-R
 BugReports: https://github.com/phisanti/scip-R/issues
 Encoding: UTF-8
 Depends: R (>= 3.6)

@@ -10,3 +10,6 @@
 ^analyze_bench\.sh$
 ^doc$
 ^Meta$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$
