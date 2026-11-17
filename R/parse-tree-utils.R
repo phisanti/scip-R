@@ -1,7 +1,7 @@
 # Parse-tree navigation helpers for symbol extraction.
 # Builds reusable tree indexes and descendant lookups for parser consumers.
-# Inventory: `build_tree_index()`, `build_scope_index()`, `get_children_indexed()`,
-# `get_parent_id_indexed()`, `find_ancestor_of_type_indexed()`.
+# Inventory: `build_tree_index()`, `build_scope_index()`, `find_function_bindings()`,
+# `get_children_indexed()`, `get_parent_id_indexed()`, `find_ancestor_of_type_indexed()`.
 
 #' @include benchmark.R
 #' @include parser.R
@@ -20,6 +20,7 @@ NULL
 #' Also pre-computes:
 #' - enclosing_function: For each node, the ID of its innermost enclosing FUNCTION/OP-LAMBDA
 #' - inside_function: Logical vector indicating if each node is inside a function body
+#' - function_bindings: Logical vector marking the names bound to a function literal
 #'
 #' @param parse_data Parse data data.frame from getParseData().
 #' @return A list with:
@@ -30,6 +31,7 @@ NULL
 #'   - cpp_index: (optional) External pointer to C++ TreeIndex for fast lookups
 #'   - enclosing_function: Integer vector of enclosing function IDs (NA for top-level)
 #'   - inside_function: Logical vector indicating if node is inside a function
+#'   - function_bindings: Logical vector, TRUE at each SYMBOL bound to a function
 #' @keywords internal
 #' @examples
 #' \dontrun{
@@ -47,11 +49,11 @@ build_tree_index <- function(parse_data) {
       parent = empty_env,
       rows = empty_env,
       by_line = empty_env,
-      has_func_on_line = empty_env,
       data = parse_data,
       cpp_index = NULL,
       enclosing_function = integer(0),
       inside_function = logical(0),
+      function_bindings = logical(0),
       function_names = new.env(hash = TRUE, parent = emptyenv())
     ))
   }
@@ -83,14 +85,6 @@ build_tree_index <- function(parse_data) {
   by_line_list <- split(seq_len(nrow(parse_data)), parse_data$line1)
   by_line <- list2env(by_line_list, hash = TRUE, parent = emptyenv(), size = length(by_line_list))
 
-  # Pre-compute which lines contain function definitions (FUNCTION or OP-LAMBDA tokens)
-  func_tokens <- c("FUNCTION", "OP-LAMBDA")
-  func_lines <- unique(parse_data$line1[parse_data$token %in% func_tokens])
-  has_func_on_line <- new.env(hash = TRUE, parent = emptyenv(), size = max(length(func_lines), 1L))
-  for (fl in as.character(func_lines)) {
-    has_func_on_line[[fl]] <- TRUE
-  }
-
   # Pre-compute enclosing function for each node (O(n) single pass)
   # This enables O(1) "is inside function" checks instead of O(depth) tree walks
   # Note: build_scope_index needs named vectors for vectorized indexing
@@ -102,18 +96,102 @@ build_tree_index <- function(parse_data) {
   # Used by get_enclosing_function_name() for O(1) name lookups.
   function_names <- build_function_name_map(parse_data)
 
-  list(
+  index <- list(
     children = children,
     parent = parent,
     rows = rows,
     by_line = by_line,
-    has_func_on_line = has_func_on_line,
     data = parse_data,
     cpp_index = cpp_index,
     enclosing_function = scope_result$enclosing_function,
     inside_function = scope_result$inside_function,
     function_names = function_names
   )
+  index$function_bindings <- find_function_bindings(parse_data, index)
+  index
+}
+
+# Tokens that open a function literal; R 4.1+ tokenises the lambda backslash as `'\\'`.
+FUNCTION_LITERAL_TOKENS <- c("FUNCTION", "OP-LAMBDA", "'\\\\'")
+
+#' Mark the names bound to a function literal.
+#'
+#' `f <- function(x) ...`, `f = (function(x) ...)` and `(function(x) ...) -> f`
+#' bind a function. A function passed as an argument binds none:
+#' `x <- lapply(xs, function(w) ...)` binds the call's result, so `x` is a
+#' variable and the calls inside the lambda belong to the enclosing function.
+#'
+#' @param parse_data Parse data data.frame.
+#' @param index Tree index (children and rows are enough).
+#' @return Logical vector aligned with parse_data rows, TRUE at bound SYMBOLs.
+#' @keywords internal
+# BUG FIX (Architext-d99bt, Architext-tehcz): a local such as
+# `maxw <- max(sapply(ww, function(w) ...))` was a Function, so a call inside
+# that lambda was attributed to the local rather than the enclosing function.
+# Kind came from a FUNCTION token anywhere on the assignment's line; it now
+# comes from the assignment's value being a function literal.
+# Anti-regression tests: tests/testthat/test-symbols.R
+#   - a local whose value passes an anonymous function is a variable in both backends
+#   - a top-level value built by a call taking a function is a package variable
+#   - a call inside a lambda argument belongs to the enclosing function in both backends
+find_function_bindings <- function(parse_data, index) {
+  bound <- logical(nrow(parse_data))
+  for (row in which(parse_data$token %in% c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN"))) {
+    operands <- assignment_operands_indexed(row, parse_data, index)
+    if (!is.null(operands) && !is.na(function_literal_row_indexed(operands$value, index))) {
+      bound[operands$target] <- TRUE
+    }
+  }
+  bound
+}
+
+#' Split an assignment into its bound name and its value.
+#'
+#' @param row Row index of the assignment operator.
+#' @param parse_data Parse data data.frame.
+#' @param index Tree index.
+#' @return `list(target, value)`: the bound SYMBOL's row and the value expr's
+#'   node ID; NULL when the target is not a bare name (e.g. `x$field <- 1`).
+#' @keywords internal
+assignment_operands_indexed <- function(row, parse_data, index) {
+  child_rows <- ordered_child_rows(parse_data$parent[row], parse_data, index)
+  operator <- match(row, child_rows)
+  rightward <- parse_data$token[row] == "RIGHT_ASSIGN"
+  target_position <- operator + if (rightward) 1L else -1L
+  value_position <- operator + if (rightward) -1L else 1L
+  if (is.na(operator) || target_position < 1L || value_position < 1L ||
+      max(target_position, value_position) > length(child_rows)) {
+    return(NULL)
+  }
+  target <- get_children_indexed(parse_data$id[child_rows[target_position]], index)
+  if (length(target) != 1L) return(NULL)
+  target_row <- get_row_indexed(target, index)
+  if (parse_data$token[target_row] != "SYMBOL") return(NULL)
+  list(target = target_row, value = parse_data$id[child_rows[value_position]])
+}
+
+#' Find the function literal an expression is, looking through parentheses.
+#'
+#' @param expr_id Node ID of an expr.
+#' @param index Tree index.
+#' @return Row index of the FUNCTION or lambda token, or NA when the expr is
+#'   not a function literal (a call taking one as an argument is not).
+#' @keywords internal
+function_literal_row_indexed <- function(expr_id, index) {
+  child_rows <- ordered_child_rows(expr_id, index$data, index)
+  tokens <- index$data$token[child_rows]
+  literal <- child_rows[tokens %in% FUNCTION_LITERAL_TOKENS]
+  if (length(literal) == 1L) return(literal)
+  if (identical(tokens, c("'('", "expr", "')'"))) {
+    return(function_literal_row_indexed(index$data$id[child_rows[2]], index))
+  }
+  NA_integer_
+}
+
+# Child rows of a node in source order.
+ordered_child_rows <- function(node_id, parse_data, index) {
+  child_rows <- vapply(get_children_indexed(node_id, index), get_row_indexed, integer(1), index = index)
+  child_rows[order(parse_data$line1[child_rows], parse_data$col1[child_rows])]
 }
 
 #' Build scope index with enclosing function for each node.

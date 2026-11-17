@@ -321,3 +321,25 @@ test_that("non-function list elements are not emitted as closures", {
   expect_equal(length(closures), 1)
   expect_equal(closures[[1]]$name, "handler")
 })
+
+# Architext-d99bt: an element whose value is a call taking a function
+# is data, not a closure; a parenthesised function literal still is one.
+test_that("an element built by a call taking a function is not a closure", {
+  tmp_dir <- tempfile("scip_closure_call_value_")
+  dir.create(tmp_dir)
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+
+  file_path <- file.path(tmp_dir, "init.R")
+  writeLines(c(
+    "MODULE <- list(",
+    "  server = function(id) id,",
+    "  handlers = lapply(1:2, function(i) i),",
+    "  wrapped = (function() NULL)",
+    ")"
+  ), file_path)
+
+  ast <- parse_file(list(path = file_path, relative_path = "init.R"))
+  closures <- extract_list_closure_definitions(ast$parse_data, build_tree_index(ast$parse_data))
+
+  expect_identical(vapply(closures, function(closure) closure$name, character(1)), c("server", "wrapped"))
+})

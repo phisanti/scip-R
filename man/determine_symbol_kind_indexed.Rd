@@ -17,6 +17,6 @@ determine_symbol_kind_indexed(row, parse_data, index)
 Character label describing the symbol kind.
 }
 \description{
-Uses tree index for O(1) lookups and early-exit DFS.
+Uses tree index for O(1) lookups.
 }
 \keyword{internal}

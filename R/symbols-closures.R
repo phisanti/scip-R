@@ -98,9 +98,12 @@ extract_list_closure_definitions <- function(data, tree_index) {
     rhs_expr_rows <- rhs_expr_rows[order(rhs_expr_rows$line1, rhs_expr_rows$col1), , drop = FALSE]
     rhs_expr <- rhs_expr_rows[1, ]
 
-    # Check if the RHS expr contains a FUNCTION or lambda token
-    # R 4.1+ uses '\\' token for \(x) lambda syntax (not OP-LAMBDA)
-    if (!has_descendant_of_type_indexed(rhs_expr$id, c("FUNCTION", "OP-LAMBDA", "'\\\\'"), tree_index)) {
+    # BUG FIX (Architext-d99bt): `handlers = lapply(xs, function(i) ...)` was
+    # a closure because the value merely contained a function token; the value
+    # must be the function literal itself.
+    # Anti-regression tests: tests/testthat/test-symbols-list-closures.R
+    #   - an element built by a call taking a function is not a closure
+    if (is.na(function_literal_row_indexed(rhs_expr$id, tree_index))) {
       next
     }
 

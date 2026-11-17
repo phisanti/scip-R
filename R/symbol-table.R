@@ -215,25 +215,12 @@ build_lexical_symbol_map <- function(data, index, relative_path) {
   assignments <- list()
   for (row in which(data$token %in% c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN"))) {
     if (data$text[row] %in% c("<<-", "->>")) next
-    children <- get_children_indexed(data$parent[row], index)
-    child_rows <- vapply(children, get_row_indexed, integer(1), index = index)
-    child_rows <- child_rows[order(data$line1[child_rows], data$col1[child_rows])]
-    operator <- match(row, child_rows)
-    rightward <- data$token[row] == "RIGHT_ASSIGN"
-    target_position <- operator + if (rightward) 1L else -1L
-    value_position <- operator + if (rightward) -1L else 1L
-    if (is.na(operator) || target_position < 1L || value_position < 1L ||
-        max(target_position, value_position) > length(child_rows)) next
-    target <- get_children_indexed(data$id[child_rows[target_position]], index)
-    if (length(target) != 1L) next # Not a bare binding (e.g. object$field).
-    target_row <- get_row_indexed(target, index)
-    if (data$token[target_row] != "SYMBOL") next
-    value <- get_children_indexed(data$id[child_rows[value_position]], index)
-    value_rows <- vapply(value, get_row_indexed, integer(1), index = index)
-    functions <- value_rows[data$token[value_rows] %in% c("FUNCTION", "OP-LAMBDA")]
-    is_function <- length(functions) == 1L
-    if (is_function) function_names[[as.character(data$id[functions])]] <- data$text[target_row]
-    assignments[[length(assignments) + 1L]] <- list(row = target_row, function_binding = is_function)
+    operands <- assignment_operands_indexed(row, data, index)
+    if (is.null(operands)) next # Not a bare binding (e.g. object$field).
+    literal <- function_literal_row_indexed(operands$value, index)
+    is_function <- !is.na(literal)
+    if (is_function) function_names[[as.character(data$id[literal])]] <- data$text[operands$target]
+    assignments[[length(assignments) + 1L]] <- list(row = operands$target, function_binding = is_function)
   }
 
   scope_name <- function(scope) {
@@ -393,10 +380,6 @@ extract_top_level_definitions_with_index <- function(ast_module) {
   assignment_rows <- data[data$token %in% assignment_tokens, , drop = FALSE]
   bench_end(t_find, list(assignment_count = nrow(assignment_rows)))
 
-  # Pre-compute function tokens on each line for quick RHS check
-  func_tokens <- c("FUNCTION", "OP-LAMBDA")
-  func_token_rows <- data[data$token %in% func_tokens, , drop = FALSE]
-
   t_analyze <- bench_start("phase2_analyze_assignments", list(assignment_count = nrow(assignment_rows)))
   # Get inside_function mask for O(1) lookup by row index
   inside_func_mask <- tree_index$inside_function %||% logical(nrow(data))
@@ -419,9 +402,7 @@ extract_top_level_definitions_with_index <- function(ast_module) {
 
     name <- symbol_row$text
 
-    # O(1) check: is this a function assignment?
-    # Look for FUNCTION/OP-LAMBDA on same line, after the assignment operator
-    kind <- if (is_function_assignment_fast(assign_row, func_token_rows)) {
+    kind <- if (isTRUE(tree_index$function_bindings[get_row_indexed(symbol_row$id, tree_index)])) {
       "function"
     } else {
       "variable"
@@ -513,26 +494,6 @@ compute_inside_function_ids_legacy <- function(parse_data, tree_index) {
     inside_ids <- c(inside_ids, as.character(desc_ids))
   }
   unique(inside_ids)
-}
-
-#' Fast check if assignment creates a function (O(1)).
-#'
-#' Checks if there's a FUNCTION or OP-LAMBDA token on the same line
-#' as the assignment, positioned after the assignment operator.
-#' This is a fast approximation that works for typical R code patterns.
-#'
-#' @param assign_row Parse data row for the assignment token.
-#' @param func_token_rows Pre-filtered rows containing only FUNCTION/OP-LAMBDA tokens.
-#' @return TRUE if this appears to be a function assignment.
-#' @keywords internal
-is_function_assignment_fast <- function(assign_row, func_token_rows) {
-  # Look for FUNCTION/OP-LAMBDA on same line, after the assignment
-  line <- assign_row$line1
-  col <- assign_row$col1
-
-  # Check if any function token is on same line and after assignment
-  matches <- func_token_rows$line1 == line & func_token_rows$col1 > col
-  any(matches)
 }
 
 #' Find the symbol being assigned to in an assignment expression.

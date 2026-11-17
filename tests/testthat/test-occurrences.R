@@ -159,7 +159,10 @@ testthat::test_that("tree index uses environment-based O(1) lookups", {
   testthat::expect_true(is.environment(tree_index$parent))
   testthat::expect_true(is.environment(tree_index$rows))
   testthat::expect_true(is.environment(tree_index$by_line))
-  testthat::expect_true(is.environment(tree_index$has_func_on_line))
+  testthat::expect_identical(
+    parse_data$text[tree_index$function_bindings],
+    "x"
+  )
 
   # Accessor functions should still work correctly
   # Find a node with children (the top-level expr)

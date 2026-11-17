@@ -410,3 +410,110 @@ testthat::test_that("resolve_symbols emits 0-based SCIP occurrence ranges", {
   # Reference is indented by two spaces on line 2 => start column 3 (1-based).
   expect_identical(ref_occ$range, c(1L, 2L, 1L, 17L))
 })
+
+# Architext-d99bt: a name is a function only when its assigned value is a
+# function literal. `x <- f(..., function(w) ...)` binds the call's result.
+function_kind_project <- function(files) {
+  root <- tempfile("scip_function_kind_")
+  dir.create(file.path(root, "R"), recursive = TRUE)
+  writeLines(c("Package: functionkind", "Version: 1.0.0"), file.path(root, "DESCRIPTION"))
+  for (name in names(files)) writeLines(files[[name]], file.path(root, "R", name))
+  root
+}
+
+definition_kinds <- function(result) {
+  definitions <- Filter(function(occ) identical(occ$role, "definition"), result$occurrences)
+  ids <- vapply(definitions, function(occ) occ$symbol, character(1))
+  kinds <- vapply(result$symbols, function(sym) sym$kind, character(1))
+  names(kinds) <- vapply(result$symbols, function(sym) sym$display_name, character(1))
+  kinds[vapply(result$symbols, function(sym) sym$symbol %in% ids, logical(1))]
+}
+
+testthat::test_that("a local whose value passes an anonymous function is a variable in both backends", {
+  lines <- c(
+    "plot_var <- function(ww) {",
+    "  maxw <- max(sapply(ww, function(w) max(abs(w))))",
+    "  scaled <- lapply(ww,",
+    "    function(w) w / maxw)",
+    "  inner <- function(x) x / maxw",
+    "  wrapped <- (function(x) x * 2)",
+    "  split <-",
+    "    function(x) x",
+    "  inner(scaled)",
+    "}"
+  )
+  for (backend in c("R", "cpp")) {
+    with_resolver_backend(backend, function() {
+      root <- function_kind_project(list("plot.R" = lines))
+      on.exit(unlink(root, recursive = TRUE), add = TRUE)
+      ast <- parse_file(list(path = file.path(root, "R", "plot.R"), relative_path = "R/plot.R"))
+      kinds <- definition_kinds(resolve_symbols(ast, list(metadata = list(namespace = NULL))))
+      expect_identical(
+        kinds[c("plot_var", "maxw", "scaled", "inner", "wrapped", "split")],
+        c(plot_var = "function", maxw = "variable", scaled = "variable",
+          inner = "function", wrapped = "function", split = "function"),
+        info = backend
+      )
+    })
+  }
+})
+
+testthat::test_that("a top-level value built by a call taking a function is a package variable", {
+  root <- function_kind_project(list("sets.R" = c(
+    "custom_g <- lapply(sets, function(s) toupper(s))",
+    "handler = function(x) x",
+    "builder <- (function(x) x)"
+  )))
+  on.exit(unlink(root, recursive = TRUE), add = TRUE)
+  workspace <- analyze_workspace(root)
+  parsed <- lapply(discover_files(workspace, include_patterns = "R/**/*.R")$files, parse_file)
+  definitions <- build_symbol_table(parsed, workspace)$definitions
+
+  expect_identical(definitions[["custom_g"]]$kind, "variable")
+  expect_match(definitions[["custom_g"]]$symbol_id, " custom_g\\.$")
+  expect_identical(definitions[["handler"]]$kind, "function")
+  expect_identical(definitions[["builder"]]$kind, "function")
+})
+
+# Architext-tehcz: semquery attributes a call to the innermost
+# Function-kind definition whose enclosing range holds it, so a variable
+# assigned from `lapply(xs, function(s) g(s))` must not be one.
+testthat::test_that("a call inside a lambda argument belongs to the enclosing function in both backends", {
+  lines <- c(
+    "add_gmt <- function(pgx, custom_gmt) {",
+    "  custom_g <- lapply(custom_gmt, function(s) probe2symbol(s))",
+    "  pgx",
+    "}",
+    "probe2symbol <- function(s) toupper(s)"
+  )
+  contains <- function(outer, line, col) {
+    (line > outer[1] || (line == outer[1] && col >= outer[2])) &&
+      (line < outer[3] || (line == outer[3] && col <= outer[4]))
+  }
+  for (backend in c("R", "cpp")) {
+    with_resolver_backend(backend, function() {
+      root <- function_kind_project(list("gmt.R" = lines))
+      on.exit(unlink(root, recursive = TRUE), add = TRUE)
+      output <- file.path(root, "index.scip")
+      index_project(list(
+        root = root, output = output, include = "R/**/*.R", namespace = NULL,
+        `project-name` = NULL, cache = FALSE, parallel = 0L
+      ))
+      document <- scipr_document(scipr_read_index(output), "R/gmt.R")
+      symbols <- scipr_symbols_by_id(document)
+      call <- Find(function(occ) {
+        grepl("probe2symbol", occ$symbol, fixed = TRUE) && occ$range[1] == 1L
+      }, as.list(document$occurrences))
+      expect_false(is.null(call), info = backend)
+      owners <- Filter(function(occ) {
+        info <- symbols[[occ$symbol]]
+        bitwAnd(as.integer(occ$symbol_roles), 1L) != 0L &&
+          !is.null(info) && info$kind == scipr_symbol_kind("Function") &&
+          length(occ$enclosing_range) == 4L &&
+          contains(occ$enclosing_range, call$range[1], call$range[2])
+      }, as.list(document$occurrences))
+      owner_names <- vapply(owners, function(occ) symbols[[occ$symbol]]$display_name, character(1))
+      expect_identical(owner_names, "add_gmt", info = backend)
+    })
+  }
+})

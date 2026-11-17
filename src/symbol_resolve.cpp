@@ -27,7 +27,7 @@
 // ALGORITHM OVERVIEW:
 //   1. Build lookup indices for O(1) queries:
 //      - assignment_by_line: which lines have assignment operators
-//      - func_lines: which lines have FUNCTION/OP-LAMBDA tokens
+//      - function_bindings (from R): which SYMBOLs are bound to a function literal
 //      - base_r_set: set of base R function names
 //
 //   2. For each symbol token (SYMBOL, SYMBOL_FUNCTION_CALL, SYMBOL_FORMALS):
@@ -100,10 +100,7 @@ std::string determine_symbol_kind(
     int node_id,                    // Node ID for tree lookups
     TreeIndex* idx,                 // Tree index for parent lookups
     CharacterVector& tokens,        // All token types
-    IntegerVector& line1,           // Start line numbers
-    IntegerVector& col1,            // Start column numbers
-    const std::unordered_map<int, std::vector<int>>& assignment_by_line,
-    const std::unordered_set<int>& func_lines
+    LogicalVector& function_bindings  // Names bound to a function literal
 ) {
   // 1. Function parameters (SYMBOL_FORMALS) are always "parameter"
   if (token_type == "SYMBOL_FORMALS") {
@@ -115,24 +112,11 @@ std::string determine_symbol_kind(
     return "variable";
   }
 
-  // 3. Check for function definition pattern:
-  //    - Symbol appears on a line with FUNCTION/OP-LAMBDA
-  //    - Symbol appears before an assignment operator
-  //    Example: `foo <- function(x) { ... }`
-  //             ^^^-- this symbol is kind "function"
-  int line = line1[row_idx];
-  int col = col1[row_idx];
-
-  if (func_lines.count(line) > 0) {  // Line has a FUNCTION token
-    auto ait = assignment_by_line.find(line);
-    if (ait != assignment_by_line.end()) {
-      for (int assign_col : ait->second) {
-        if (assign_col > col) {
-          // Symbol is before an assignment, and line has FUNCTION
-          return "function";
-        }
-      }
-    }
+  // 3. A name bound to a function literal, from find_function_bindings():
+  //    `foo <- function(x) ...` is a function; `foo <- lapply(xs, function(x) ...)`
+  //    binds the call's result and is not.
+  if (row_idx < function_bindings.size() && function_bindings[row_idx] == TRUE) {
+    return "function";
   }
 
   // 4. Function calls (SYMBOL_FUNCTION_CALL) are "call"
@@ -259,6 +243,8 @@ std::string resolve_symbol(
 //'   (pre-computed by build_tree_index() for O(1) lookup)
 //' @param enclosing_function IntegerVector of enclosing function node IDs for each row
 //'   (pre-computed by build_scope_index() for scope encoding in local symbol IDs)
+//' @param function_bindings LogicalVector, TRUE at each SYMBOL bound to a function
+//'   literal (pre-computed by find_function_bindings())
 //' @param lexical_symbols CharacterVector of nearest lexical binding IDs per row
 //'   (empty entries retain package/base lookup; qualified calls take precedence)
 //' @param definitions_env R environment from symbol_table$definitions_env mapping
@@ -295,6 +281,7 @@ List resolve_symbols_cpp(
     SEXP tree_index_ptr,
     LogicalVector inside_function,
     IntegerVector enclosing_function,
+    LogicalVector function_bindings,
     CharacterVector lexical_symbols,
     Environment definitions_env,
     CharacterVector base_r_funcs,
@@ -336,16 +323,6 @@ List resolve_symbols_cpp(
     std::string tok = as<std::string>(token[i]);
     if (tok == "LEFT_ASSIGN" || tok == "EQ_ASSIGN" || tok == "RIGHT_ASSIGN") {
       assignment_by_line[line1[i]].push_back(col1[i]);
-    }
-  }
-
-  // Set of line numbers that contain FUNCTION or OP-LAMBDA tokens
-  // Used as quick filter before checking for function definitions
-  std::unordered_set<int> func_lines;
-  for (int i = 0; i < n; i++) {
-    std::string tok = as<std::string>(token[i]);
-    if (tok == "FUNCTION" || tok == "OP-LAMBDA") {
-      func_lines.insert(line1[i]);
     }
   }
 
@@ -492,8 +469,7 @@ List resolve_symbols_cpp(
 
     // --- Determine symbol kind ---
     std::string kind = determine_symbol_kind(
-      row_idx, tok, node_id, idx.get(), token,
-      line1, col1, assignment_by_line, func_lines
+      row_idx, tok, node_id, idx.get(), token, function_bindings
     );
 
     // --- Look up enclosing function name for scope encoding ---

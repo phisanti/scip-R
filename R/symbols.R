@@ -2,8 +2,7 @@
 # Resolves definitions and references, then delegates to specialized extractors
 # for language-specific constructs and cross-file linking.
 # Inventory: `resolve_symbols()`, `resolve_symbol_id_fast()`,
-# `is_function_definition_indexed()`, `determine_symbol_kind_indexed()`,
-# `merge_external_refs()`.
+# `determine_symbol_kind_indexed()`, `merge_external_refs()`.
 
 #' @include utils.R
 #' @include benchmark.R
@@ -122,6 +121,7 @@ resolve_symbols <- function(ast_module, workspace, track_externals = TRUE, symbo
         tree_index_ptr = tree_index$cpp_index,
         inside_function = tree_index$inside_function %||% logical(nrow(data)),
         enclosing_function = tree_index$enclosing_function %||% integer(nrow(data)),
+        function_bindings = tree_index$function_bindings,
         lexical_symbols = lexical_symbols,
         definitions_env = definitions_env %||% new.env(hash = TRUE, parent = emptyenv()),
         base_r_funcs = BASE_R_FUNCTIONS,
@@ -666,60 +666,9 @@ resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
   symbol_id
 }
 
-#' Check if symbol is defined as a function.
-#'
-#' Uses tree index for O(1) lookups and early-exit DFS.
-#'
-#' @param row Parse-data row for the symbol.
-#' @param parse_data Full parse-data frame.
-#' @param index Tree index from build_tree_index().
-#' @return Logical indicating if this is a function definition.
-#' @keywords internal
-is_function_definition_indexed <- function(row, parse_data, index) {
-  line <- row$line1
-
-  # FAST PATH: If no FUNCTION/OP-LAMBDA token on this line, can't be a function definition
-  # This avoids expensive subtree traversal for ~95% of cases
-  line_key <- as.character(line)
-  if (!exists(line_key, envir = index$has_func_on_line, inherits = FALSE)) {
-    return(FALSE)
-  }
-
-  # Find assignment on same line after this symbol - use indexed O(1) line lookup
-  assignment_tokens <- c("LEFT_ASSIGN", "EQ_ASSIGN", "RIGHT_ASSIGN")
-  assignment_rows <- find_on_same_line_indexed(
-    row$id,
-    index,
-    assignment_tokens,
-    "after"
-  )
-
-  if (nrow(assignment_rows) == 0) {
-    return(FALSE)
-  }
-
-  # Get the closest assignment (smallest column position)
-  assignment_rows <- assignment_rows[order(assignment_rows$col1), , drop = FALSE]
-  assignment_row <- assignment_rows[1, ]
-
-  # Get the expression containing the assignment - use indexed ancestor lookup
-  assignment_expr <- find_ancestor_of_type_indexed(assignment_row$id, "expr", index)
-
-  if (nrow(assignment_expr) == 0) {
-    return(FALSE)
-  }
-
-  # Check if the expression contains FUNCTION or OP-LAMBDA - use indexed early-exit DFS
-  has_descendant_of_type_indexed(
-    assignment_expr$id,
-    c("FUNCTION", "OP-LAMBDA"),
-    index
-  )
-}
-
 #' Determine the general kind for a symbol token.
 #'
-#' Uses tree index for O(1) lookups and early-exit DFS.
+#' Uses tree index for O(1) lookups.
 #'
 #' @param row Parse-data row for the symbol.
 #' @param parse_data Full parse-data frame.
@@ -741,8 +690,8 @@ determine_symbol_kind_indexed <- function(row, parse_data, index) {
     }
   }
 
-  # FIX 3: Robust function detection - use indexed version
-  if (is_function_definition_indexed(row, parse_data, index)) {
+  # A name bound to a function literal (see find_function_bindings())
+  if (isTRUE(index$function_bindings[get_row_indexed(row$id, index)])) {
     return("function")
   }
 

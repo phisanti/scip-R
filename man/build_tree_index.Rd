@@ -18,6 +18,7 @@ A list with:
   - cpp_index: (optional) External pointer to C++ TreeIndex for fast lookups
   - enclosing_function: Integer vector of enclosing function IDs (NA for top-level)
   - inside_function: Logical vector indicating if node is inside a function
+  - function_bindings: Logical vector, TRUE at each SYMBOL bound to a function
 }
 \description{
 Pre-computes parent-child relationships from parse data to enable
@@ -30,6 +31,7 @@ Falls back to pure R implementation otherwise.
 Also pre-computes:
 - enclosing_function: For each node, the ID of its innermost enclosing FUNCTION/OP-LAMBDA
 - inside_function: Logical vector indicating if each node is inside a function body
+- function_bindings: Logical vector marking the names bound to a function literal
 }
 \examples{
 \dontrun{

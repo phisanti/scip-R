@@ -9,6 +9,7 @@ resolve_symbols_cpp(
   tree_index_ptr,
   inside_function,
   enclosing_function,
+  function_bindings,
   lexical_symbols,
   definitions_env,
   base_r_funcs,
@@ -28,6 +29,9 @@ id, parent, token, text, line1, col1, line2, col2}
 
 \item{enclosing_function}{IntegerVector of enclosing function node IDs for each row
 (pre-computed by build_scope_index() for scope encoding in local symbol IDs)}
+
+\item{function_bindings}{LogicalVector, TRUE at each SYMBOL bound to a function
+literal (pre-computed by find_function_bindings())}
 
 \item{lexical_symbols}{CharacterVector of nearest lexical binding IDs per row
 (empty entries retain package/base lookup; qualified calls take precedence)}
