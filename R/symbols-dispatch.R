@@ -182,7 +182,7 @@ resolve_shiny_dispatch_target <- function(target_name, definitions_env, relative
 
   # Try symbol table first (cross-file resolution)
   if (!is.null(definitions_env)) {
-    def <- definitions_env[[target_name]]
+    def <- find_definition(definitions_env, target_name, relative_path)
     if (!is.null(def)) {
       return(def$symbol_id)
     }
@@ -354,7 +354,7 @@ resolve_base_dispatch_target <- function(target_name, definitions_env, relative_
 
   # 1. Try symbol table first (cross-file resolution)
   if (!is.null(definitions_env)) {
-    def <- definitions_env[[target_name]]
+    def <- find_definition(definitions_env, target_name, relative_path)
     if (!is.null(def)) {
       return(def$symbol_id)
     }

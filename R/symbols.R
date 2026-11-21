@@ -610,7 +610,7 @@ resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
   if (!is.null(qualified_pkg)) {
     bench_count("phase3_fast_qualified_pkg")
     if (!is.null(definitions_env)) {
-      def <- definitions_env[[name]]
+      def <- find_definition(definitions_env, name, relative_path)
       if (!is.null(def) && grepl(qualified_pkg, def$symbol_id, fixed = TRUE)) {
         return(def$symbol_id)
       }
@@ -633,7 +633,7 @@ resolve_symbol_id_fast <- function(name, kind, is_definition, is_local_scope,
   }
 
   # O(1) lookup in definitions environment
-  def <- definitions_env[[name]]
+  def <- find_definition(definitions_env, name, relative_path)
   if (!is.null(def)) {
     bench_count("phase3_fast_table_hit")
     return(def$symbol_id)

@@ -84,6 +84,29 @@ BASE_R_FUNCTIONS <- c(
   "stopifnot", "inherits", "NextMethod", "UseMethod"
 )
 
+# Callable kinds whose same-named top-level definitions in different files
+# get distinct symbols (see build_global_symbol_id()).
+DISAMBIGUATED_KINDS <- c("function", "call", "s3_generic", "s3_method")
+
+#' Key of one file's definition of a name in definitions_env.
+#' @param name Symbol name.
+#' @param relative_path Defining file.
+#' @keywords internal
+definition_key <- function(name, relative_path) paste0(relative_path, "\t", name)
+
+#' Look up a package-level definition, preferring the referencing file's own.
+#'
+#' A name defined in several files has no plain-name entry, so a file that does
+#' not define it gets NULL (unresolved) rather than another file's definition.
+#' @param definitions_env Environment from build_symbol_table().
+#' @param name Symbol name.
+#' @param relative_path Referencing file.
+#' @return Definition record or NULL.
+#' @keywords internal
+find_definition <- function(definitions_env, name, relative_path) {
+  definitions_env[[definition_key(name, relative_path)]] %||% definitions_env[[name]]
+}
+
 #' Build a package-wide symbol table from parsed files.
 #'
 #' Scans all files to collect top-level definitions (functions, variables, classes).
@@ -125,7 +148,11 @@ build_symbol_table <- function(parsed_files, workspace) {
   # This avoids rebuilding in Phase 3
   tree_indices <- list()
 
-  # First pass: collect all top-level definitions from all files
+  # First pass: collect all top-level definitions from all files.
+  # The first definition of a name within one file wins.
+  file_definitions <- list()
+  seen_in_file <- new.env(hash = TRUE, parent = emptyenv())
+  defining_files <- new.env(hash = TRUE, parent = emptyenv())
   for (ast_module in parsed_files) {
     if (is.null(ast_module) || is.null(ast_module$parse_data)) {
       next
@@ -142,33 +169,51 @@ build_symbol_table <- function(parsed_files, workspace) {
     tree_indices[[relative_path]] <- extract_result$tree_index
     bench_end(t_extract, list(definition_count = length(file_defs)))
 
-    t_agg <- bench_start("phase2_aggregate_definitions", list(file = relative_path))
     for (def in file_defs) {
-      name <- def$name
-
-      # If symbol already defined in another file, keep the first definition
-      # (R loads files alphabetically in a package, but we'll use first-seen)
-      # Use environment lookup for O(1) check
-      if (is.null(definitions_env[[name]])) {
-        def_record <- list(
-          name = name,
-          file = relative_path,
-          kind = def$kind,
-          line = def$line,
-          exported = !is.null(exports_env[[name]]),
-          symbol_id = build_global_symbol_id(
-            name = name,
-            package_name = package_name,
-            package_version = package_version,
-            kind = def$kind
-          )
-        )
-        definitions[[name]] <- def_record
-        definitions_env[[name]] <- def_record
-      }
+      key <- definition_key(def$name, relative_path)
+      if (!is.null(seen_in_file[[key]])) next
+      seen_in_file[[key]] <- TRUE
+      file_definitions[[length(file_definitions) + 1L]] <- c(def, list(file = relative_path))
+      defining_files[[def$name]] <- c(defining_files[[def$name]], relative_path)
     }
-    bench_end(t_agg, list(total_definitions = length(definitions)))
   }
+
+  # Second pass: a name defined in one file keeps its plain ID and is found by
+  # name from any file. A callable name defined in several files gets one
+  # file-disambiguated ID per definition, found only through its file key.
+  # BUG FIX (Architext-d6ihg): same-named top-level functions in different
+  # files collapsed to the first-seen definition's symbol, so every caller in
+  # every file was attributed to one file's function.
+  # Root cause: the global symbol ID and definitions_env were keyed by name only.
+  # Anti-regression tests: tests/testthat/test-symbol-table-duplicates.R
+  #   - same top-level name in two files gets one symbol per file
+  #   - a name defined in one file keeps its plain ID across files
+  #   - a caller without its own definition of a duplicated name stays unresolved
+  t_agg <- bench_start("phase2_aggregate_definitions")
+  for (def in file_definitions) {
+    name <- def$name
+    ambiguous <- length(defining_files[[name]]) > 1L && def$kind %in% DISAMBIGUATED_KINDS
+    key <- if (ambiguous) definition_key(name, def$file) else name
+    # Variables and classes defined in several files keep first-seen identity.
+    if (!is.null(definitions_env[[key]])) next
+    def_record <- list(
+      name = name,
+      file = def$file,
+      kind = def$kind,
+      line = def$line,
+      exported = !is.null(exports_env[[name]]),
+      symbol_id = build_global_symbol_id(
+        name = name,
+        package_name = package_name,
+        package_version = package_version,
+        kind = def$kind,
+        file = if (ambiguous) def$file
+      )
+    )
+    definitions[[key]] <- def_record
+    definitions_env[[key]] <- def_record
+  }
+  bench_end(t_agg, list(total_definitions = length(definitions)))
 
   list(
     definitions = definitions,
@@ -282,22 +327,33 @@ build_lexical_symbol_map <- function(data, index, relative_path) {
 #' @param package_name Package name.
 #' @param package_version Package version string.
 #' @param kind Symbol kind (function, variable, class, etc.).
+#' @param file Relative path of the defining file, only for a callable name
+#'   defined in several files. It becomes the method disambiguator, e.g.
+#'   `.section(R:a.R).`; the Go decoder keeps it out of the display name.
 #' @return SCIP symbol ID string.
 #' @keywords internal
-build_global_symbol_id <- function(name, package_name, package_version, kind = "function") {
+build_global_symbol_id <- function(name, package_name, package_version, kind = "function",
+                                   file = NULL) {
   # Format: scip-r r <package> <version> <suffix>
   # Suffix: functions get "()", variables get ".", classes get "#"
   # Names with non-identifier chars (e.g. dots in R) must be backtick-quoted
   # per the SCIP spec (dots are descriptor delimiters, not identifier chars).
   esc_name <- escape_scip_identifier(name)
+  # "/" would read as a descriptor namespace cut and a space would split the
+  # symbol fields, so neither may appear in the disambiguator.
+  call_suffix <- paste0(
+    esc_name, "(",
+    if (!is.null(file)) gsub("[^A-Za-z0-9_.:-]", "_", gsub("/", ":", file, fixed = TRUE)),
+    ")."
+  )
   if (kind %in% OO_CLASS_KINDS) {
     suffix <- paste0(esc_name, "#")
   } else {
     suffix <- switch(kind,
-      `function` = paste0(esc_name, "()."),
-      call = paste0(esc_name, "()."),
-      s3_generic = paste0(esc_name, "()."),
-      s3_method = paste0(esc_name, "()."),
+      `function` = call_suffix,
+      call = call_suffix,
+      s3_generic = call_suffix,
+      s3_method = call_suffix,
       variable = paste0(esc_name, "."),
       # Default to function-style for unknown kinds
       paste0(esc_name, "().")

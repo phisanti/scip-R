@@ -128,6 +128,21 @@ std::string determine_symbol_kind(
   return "variable";
 }
 
+/// Key of the definition a reference in relative_path resolves to: the file's
+/// own definition of the name first, then the package-wide one. Empty when the
+/// name is undefined or defined in several other files (ambiguous, so
+/// unresolved). Mirrors find_definition() in R/symbol-table.R.
+static std::string find_definition_key(
+    Environment& definitions_env,
+    const std::string& name,
+    const std::string& relative_path
+) {
+  const std::string file_key = relative_path + "\t" + name;
+  if (definitions_env.exists(file_key)) return file_key;
+  if (definitions_env.exists(name)) return name;
+  return "";
+}
+
 /// Resolve a symbol to its unique ID.
 /// Resolution priority:
 ///   1. Package-level definition (from symbol_table)
@@ -166,8 +181,9 @@ std::string resolve_symbol(
   // Check definitions_env first — if qualified pkg matches our own package,
   // use the definition's symbol_id (correct version).
   if (!qualified_pkg.empty()) {
-    if (definitions_env.exists(name)) {
-      List def = definitions_env[name];
+    const std::string def_key = find_definition_key(definitions_env, name, relative_path);
+    if (!def_key.empty()) {
+      List def = definitions_env[def_key];
       if (def.containsElementNamed("symbol_id")) {
         std::string def_id = as<std::string>(def["symbol_id"]);
         if (def_id.find(qualified_pkg) != std::string::npos) {
@@ -192,8 +208,9 @@ std::string resolve_symbol(
   }
 
   // Try to find in package symbol table (cross-file resolution)
-  if (definitions_env.exists(name)) {
-    List def = definitions_env[name];
+  const std::string def_key = find_definition_key(definitions_env, name, relative_path);
+  if (!def_key.empty()) {
+    List def = definitions_env[def_key];
     if (def.containsElementNamed("symbol_id")) {
       return as<std::string>(def["symbol_id"]);
     }
