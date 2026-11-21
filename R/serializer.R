@@ -42,9 +42,59 @@ init_serializer <- function(output_path, workspace) {
 #' write_document(serializer, list(relative_path = "script.R"))
 #' }
 write_document <- function(serializer, document, diagnostics = list()) {
-  doc_message <- build_document_message(document, diagnostics)
+  doc_message <- build_document_message(add_module_symbol(document, serializer$metadata), diagnostics)
   serializer$documents[[length(serializer$documents) + 1]] <- doc_message
   invisible(NULL)
+}
+
+#' Add the module symbol that stands for a whole source file.
+#'
+#' Both the sequential and the mirai path write documents through
+#' `write_document()`, so this is the one place every document gets its module.
+#' The ID has one namespace descriptor per path segment, like scip-typescript
+#' (`R/`a.R`/`). The definition is zero-width at 0:0 and encloses the file, so
+#' a reader can attribute top-level script calls to the file.
+#'
+#' @param document Document list as returned by `build_document()`.
+#' @param metadata Workspace metadata: project root, name and version.
+#' @return The document with the module occurrence and symbol prepended.
+#' @keywords internal
+add_module_symbol <- function(document, metadata) {
+  # BUG FIX (Architext-90l0p): R files had no symbol standing for the file, so
+  # semquery could not attribute top-level script calls (outside any function)
+  # to their file.
+  # root cause: scip-r emitted only symbols for definitions inside a file,
+  # unlike scip-typescript and scip-python, which emit one module per file.
+  # Anti-regression tests: tests/testthat/test-module-symbol.R
+  #   - every indexed file has one module symbol with a definition occurrence
+  #   - module symbols leave existing symbol IDs and top-level references alone
+  #   - an empty file still gets a module symbol
+  path <- document$relative_path
+  segments <- vapply(strsplit(path, "/", fixed = TRUE)[[1]], escape_scip_identifier, character(1))
+  module_id <- sprintf(
+    "scip-r r %s %s %s/",
+    metadata$project_name %||% "unknown",
+    metadata$project_version %||% "0.0.0-dev",
+    paste(segments, collapse = "/")
+  )
+  lines <- readLines(file.path(metadata$project_root, path), warn = FALSE)
+  last_line <- max(length(lines) - 1L, 0L)
+  last_column <- if (length(lines) > 0L) nchar(lines[[length(lines)]]) else 0L
+
+  document$occurrences <- c(
+    list(list(
+      symbol = module_id,
+      range = c(0L, 0L, 0L, 0L),
+      role = "definition",
+      enclosing_range = c(0L, 0L, last_line, last_column)
+    )),
+    document$occurrences
+  )
+  document$symbols <- c(
+    list(list(symbol = module_id, display_name = path, kind = "file_module")),
+    document$symbols
+  )
+  document
 }
 
 #' Write external symbols through the serializer.
@@ -254,6 +304,7 @@ build_symbol_information_message <- function(symbol_entry) {
     s7_constructor = as.integer(kind_enum$Constructor), # 9
     # Shiny patterns
     shiny_module = as.integer(kind_enum$Module), # 27
+    file_module = as.integer(kind_enum$Module), # 27 — one per indexed file
     shiny_module_function = as.integer(kind_enum$Function), # 17
     shiny_ui = as.integer(kind_enum$Function), # 17
     shiny_server = as.integer(kind_enum$Function), # 17

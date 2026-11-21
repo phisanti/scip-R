@@ -5,6 +5,7 @@ testthat::test_that("serializer writes readable SCIP protobuf artifact", {
   tmp <- tempfile(fileext = ".scip")
   ws <- analyze_workspace(tempdir())
   ser <- init_serializer(tmp, ws)
+  writeLines("x <- 1", file.path(tempdir(), "script.R"))
   write_document(ser, list(relative_path = "script.R", language = "R"))
   write_externals(ser, list())
   path <- close_serializer(ser)
